@@ -37,13 +37,23 @@ func NewRegistry() storage.Registry {
 }
 
 func NewBucket(entries ...*Entry) *Bucket {
+	return NewBucketFrom(func(yield func(string, []byte) bool) {
+		for _, entry := range entries {
+			if !yield(entry.Key, entry.Value) {
+				break
+			}
+		}
+	})
+}
+
+func NewBucketFrom(entries iter.Seq2[string, []byte]) *Bucket {
 	bucket := &Bucket{
-		objects: make(map[string]object, len(entries)),
+		objects: make(map[string]object),
 	}
 	lastModified := time.Now()
-	for _, ent := range entries {
-		bucket.objects[ent.Key] = object{
-			value:        ent.Value,
+	for key, value := range entries {
+		bucket.objects[key] = object{
+			value:        value,
 			lastModified: lastModified,
 		}
 	}

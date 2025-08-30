@@ -5,6 +5,7 @@ go 1.24.4
 require (
 	cloud.google.com/go/storage v1.56.1
 	github.com/EmissarySocial/emissary v0.7.0
+	github.com/achille-roussel/kway-go v1.0.1
 	github.com/aws/aws-sdk-go-v2 v1.38.2
 	github.com/aws/aws-sdk-go-v2/config v1.31.5
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.3
@@ -30,7 +31,6 @@ require (
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
 	cloud.google.com/go/pubsub v1.49.0 // indirect
-	cloud.google.com/go/pubsub/v2 v2.0.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.29.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.53.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.53.0 // indirect
