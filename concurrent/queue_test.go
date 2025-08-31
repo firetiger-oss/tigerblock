@@ -150,7 +150,7 @@ func TestQueueWait(t *testing.T) {
 	var completed int32
 
 	// Add jobs
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		q.Push(func(ctx context.Context, yield func(int, error) bool) {
 			time.Sleep(10 * time.Millisecond)
 			atomic.AddInt32(&completed, 1)
@@ -567,11 +567,11 @@ func TestConcurrentAccess(t *testing.T) {
 	const numJobsPerProducer = 100
 
 	// Start producers
-	for i := 0; i < numProducers; i++ {
+	for i := range numProducers {
 		wg.Add(1)
 		go func(producer int) {
 			defer wg.Done()
-			for j := 0; j < numJobsPerProducer; j++ {
+			for j := range numJobsPerProducer {
 				q.Push(func(ctx context.Context, yield func(int, error) bool) {
 					yield(producer*1000+j, nil)
 				})

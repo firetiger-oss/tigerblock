@@ -104,7 +104,7 @@ func TestAll(t *testing.T) {
 	t.Run("large sequence", func(t *testing.T) {
 		const size = 1000
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < size; i++ {
+			for i := range size {
 				if !yield(i, nil) {
 					return
 				}
@@ -130,7 +130,7 @@ func TestAll(t *testing.T) {
 func TestLimit(t *testing.T) {
 	t.Run("basic functionality", func(t *testing.T) {
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if !yield(i, nil) {
 					return
 				}
@@ -156,7 +156,7 @@ func TestLimit(t *testing.T) {
 
 	t.Run("zero limit", func(t *testing.T) {
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if !yield(i, nil) {
 					return
 				}
@@ -182,7 +182,7 @@ func TestLimit(t *testing.T) {
 
 	t.Run("negative limit", func(t *testing.T) {
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if !yield(i, nil) {
 					return
 				}
@@ -449,7 +449,7 @@ func TestTransform(t *testing.T) {
 func TestChainedOperations(t *testing.T) {
 	t.Run("limit then transform", func(t *testing.T) {
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if !yield(i, nil) {
 					return
 				}
@@ -481,7 +481,7 @@ func TestChainedOperations(t *testing.T) {
 
 	t.Run("transform then limit", func(t *testing.T) {
 		seq := func(yield func(int, error) bool) {
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if !yield(i, nil) {
 					return
 				}

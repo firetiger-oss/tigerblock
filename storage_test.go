@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -324,13 +325,7 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, expectedKey := range expectedKeys {
-			found := false
-			for _, actualKey := range actualKeys {
-				if actualKey == expectedKey {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(actualKeys, expectedKey)
 			if !found {
 				t.Errorf("expected key %s not found in results", expectedKey)
 			}

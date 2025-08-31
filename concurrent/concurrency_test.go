@@ -445,7 +445,7 @@ func TestProcess(t *testing.T) {
 		var mu sync.Mutex
 
 		// Add jobs that track concurrent execution
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			job := fmt.Sprintf("job%d", i)
 			queue.Push(func(ctx context.Context, yield func(string, error) bool) {
 				current := atomic.AddInt64(&activeWorkers, 1)
@@ -561,7 +561,7 @@ func TestProcess(t *testing.T) {
 		queue := concurrent.NewQueue[int]()
 
 		const numJobs = 100
-		for i := 0; i < numJobs; i++ {
+		for i := range numJobs {
 			value := i
 			queue.Push(func(ctx context.Context, yield func(int, error) bool) {
 				yield(value, nil)
@@ -928,7 +928,7 @@ func TestRun2(t *testing.T) {
 		ctx := concurrent.WithLimit(t.Context(), 5)
 
 		jobs := make(map[int]string)
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			jobs[i] = fmt.Sprintf("value%d", i)
 		}
 
@@ -1234,7 +1234,7 @@ func TestRunTasks2(t *testing.T) {
 		ctx := concurrent.WithLimit(t.Context(), 4)
 
 		tasks := make(map[int]string)
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			tasks[i] = fmt.Sprintf("value%d", i)
 		}
 

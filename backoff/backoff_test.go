@@ -34,7 +34,7 @@ func TestFullJitter(t *testing.T) {
 	maxDelay := 10 * time.Second
 
 	// Test multiple attempts to ensure jitter produces different values
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		originalDelay := exponential.Backoff(attempt, minDelay, maxDelay)
 		jitteredDelay := jittered.Backoff(attempt, minDelay, maxDelay)
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -74,9 +75,7 @@ func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Re
 		return nil, err
 	}
 
-	for name, values := range b.header {
-		r.Header[name] = values
-	}
+	maps.Copy(r.Header, b.header)
 
 	if r.ContentLength == 0 && r.Body != nil {
 		r.ContentLength = -1

@@ -13,7 +13,7 @@ func TestStreamingChunkPool(t *testing.T) {
 	}
 
 	f := func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for i := 0; b.Loop(); i++ {
 			buffer, _ := c.streamingChunkBufferPool.Get().(*bytes.Buffer)
 			if buffer == nil {
 				buffer = bytes.NewBuffer(make([]byte, 0, 10))

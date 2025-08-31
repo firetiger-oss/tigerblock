@@ -75,12 +75,18 @@ require (
 	go.opentelemetry.io/otel/sdk v1.37.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.37.0 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/mod v0.26.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/telemetry v0.0.0-20250710130107-8d8967aff50b // indirect
 	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
+	golang.org/x/tools v0.35.1-0.20250728180453-01a3475a31bc // indirect
+	golang.org/x/tools/gopls v0.20.0 // indirect
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250818200422-3122310a409c // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250818200422-3122310a409c // indirect
 	google.golang.org/grpc v1.75.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )
+
+tool golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize

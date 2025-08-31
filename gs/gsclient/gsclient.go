@@ -211,7 +211,7 @@ func (c *Client) sendResumableChunk(ctx context.Context, sessionURI string, data
 			ContentEncoding string            `json:"contentEncoding,omitempty"`
 			Generation      string            `json:"generation,omitempty"`
 			Size            string            `json:"size,omitempty"`
-			Updated         time.Time         `json:"updated,omitempty"`
+			Updated         time.Time         `json:"updated"`
 			Metadata        map[string]string `json:"metadata,omitempty"`
 		}
 		if err := json.Unmarshal(resBodyBytes, &resBody); err != nil {
@@ -442,7 +442,7 @@ func (c *Client) PutObjectSingleRequest(ctx context.Context, key string, data io
 		ContentEncoding string            `json:"contentEncoding,omitempty"`
 		Generation      string            `json:"generation,omitempty"`
 		Size            string            `json:"size,omitempty"`
-		Updated         time.Time         `json:"updated,omitempty"`
+		Updated         time.Time         `json:"updated"`
 		Metadata        map[string]string `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(resBodyBytes, &resBody); err != nil {

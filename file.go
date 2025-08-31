@@ -136,7 +136,7 @@ func (info dirInfo) Size() int64        { return 0 }
 func (info dirInfo) Mode() fs.FileMode  { return fileModeRead | fileModeExecute | fs.ModeDir }
 func (info dirInfo) ModTime() time.Time { return time.Time{} }
 func (info dirInfo) IsDir() bool        { return true }
-func (info dirInfo) Sys() interface{}   { return nil }
+func (info dirInfo) Sys() any           { return nil }
 
 type dirEntry struct {
 	dir  *dir
@@ -213,7 +213,7 @@ func (info fileInfo) Size() int64        { return info.file.size }
 func (info fileInfo) Mode() fs.FileMode  { return fileModeRead }
 func (info fileInfo) ModTime() time.Time { return info.file.time }
 func (info fileInfo) IsDir() bool        { return false }
-func (info fileInfo) Sys() interface{}   { return nil }
+func (info fileInfo) Sys() any           { return nil }
 
 type File struct {
 	ctx    context.Context

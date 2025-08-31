@@ -95,7 +95,7 @@ func TestLRUEviction(t *testing.T) {
 	lru := &LRU[string, string]{Limit: 100}
 
 	// Fill cache to capacity
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := fmt.Sprintf("key%d", i)
 		_, err := lru.Load(key, func() (int64, string, error) {
 			return 10, fmt.Sprintf("value%d", i), nil
@@ -178,12 +178,12 @@ func TestLRUConcurrentAccess(t *testing.T) {
 	var errorCount int32
 
 	// Start multiple goroutines doing concurrent operations
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			for j := 0; j < numOperations; j++ {
+			for j := range numOperations {
 				key := (goroutineID * numOperations) + j
 
 				// Load
@@ -238,7 +238,7 @@ func TestLRUInflightDeduplication(t *testing.T) {
 	}
 
 	// Start multiple goroutines trying to load the same key
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
