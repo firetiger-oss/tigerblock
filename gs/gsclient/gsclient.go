@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	gcloud "cloud.google.com/go/storage"
 	"github.com/firetiger-oss/storage"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
@@ -62,7 +61,12 @@ func WithStreamingChunkSize(size int) Option {
 const DefaultStreamingChunkSize = 8 * 1024 * 1024
 
 func NewHTTPClientWithDefaultCredentials(ctx context.Context, baseClient *http.Client) (*http.Client, error) {
-	creds, err := google.FindDefaultCredentials(ctx, gcloud.ScopeFullControl)
+	// Use cloud-platform scope to enable IAM Credentials API for signing URLs
+	// This scope includes both GCS access and the ability to call SignBlob
+	scopes := []string{
+		"https://www.googleapis.com/auth/cloud-platform",
+	}
+	creds, err := google.FindDefaultCredentials(ctx, scopes...)
 	if err != nil {
 		return nil, err
 	}
