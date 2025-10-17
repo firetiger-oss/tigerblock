@@ -28,6 +28,7 @@ package backoff
 import (
 	"context"
 	"iter"
+	"math"
 	"math/rand/v2"
 	"time"
 )
@@ -65,7 +66,10 @@ func (f StrategyFunc) Backoff(attempt int, minDelay, maxDelay time.Duration) tim
 //   - Attempt 5+: 8s (capped at maxDelay)
 func Exponential() Strategy {
 	return StrategyFunc(func(attempt int, minDelay, maxDelay time.Duration) time.Duration {
-		return min(minDelay<<attempt, maxDelay)
+		maxShift := int(math.Log2(float64(maxDelay))-math.Log2(float64(minDelay))) + 1
+		attempt = min(attempt, maxShift)
+		d := min(minDelay<<attempt, maxDelay)
+		return d
 	})
 }
 
