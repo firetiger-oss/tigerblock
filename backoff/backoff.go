@@ -70,22 +70,23 @@ func Exponential() Strategy {
 }
 
 // FullJitter wraps a backoff Strategy to add random jitter, returning a delay
-// between 0 and the original strategy's delay. This helps prevent thundering
+// between minDelay and the original strategy's delay. This helps prevent thundering
 // herd problems when many clients retry simultaneously.
 //
-// The jitter is "full" because it can reduce the delay all the way to 0,
-// providing maximum randomization. For less aggressive jitter, consider
-// implementing custom strategies.
-//
-// Example: If the wrapped strategy returns 1000ms, FullJitter returns
-// a random duration between 0ms and 1000ms.
+// Example: If the wrapped strategy is invoked with a minDelay of 250ms and returns
+// 1000ms, FullJitter returns a random duration between 250ms and 1000ms.
 func FullJitter(backoff Strategy) Strategy {
 	return StrategyFunc(func(attempt int, minDelay, maxDelay time.Duration) time.Duration {
 		delay := backoff.Backoff(attempt, minDelay, maxDelay)
-		if delay <= 0 {
-			return 0
+		if delay <= minDelay {
+			return minDelay
 		}
-		return time.Duration(rand.Int64N(int64(delay)))
+
+		// Subtract a random amount to bring it between [0, delay)
+		delay = delay - time.Duration(rand.Int64N(int64(delay)))
+
+		// Re-apply lower bound
+		return max(delay, minDelay)
 	})
 }
 

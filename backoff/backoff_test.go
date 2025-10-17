@@ -55,8 +55,8 @@ func TestFullJitterWithZeroDuration(t *testing.T) {
 	jittered := backoff.FullJitter(strategy)
 
 	result := jittered.Backoff(0, time.Second, 10*time.Second)
-	if result != 0 {
-		t.Errorf("expected 0 duration for zero backoff, got %v", result)
+	if result != time.Second {
+		t.Errorf("expected 1s duration for zero backoff, got %v", result)
 	}
 }
 
