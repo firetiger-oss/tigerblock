@@ -1,11 +1,14 @@
 package http_test
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -153,4 +156,135 @@ func (debug *debugReadCloser) Close() error {
 		debug.t.Logf("error closing the response body after reading %d bytes: %v\n", debug.read, err)
 	}
 	return err
+}
+
+// rateLimitingTransport is a custom http.RoundTripper that simulates rate limiting
+// by returning HTTP 429 (Too Many Requests) responses for all requests.
+type rateLimitingTransport struct {
+	transport http.RoundTripper
+}
+
+func (rt *rateLimitingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Always return 429 Too Many Requests
+	return &http.Response{
+		Status:     "429 Too Many Requests",
+		StatusCode: http.StatusTooManyRequests,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString("rate limit exceeded")),
+		Request:    req,
+	}, nil
+}
+
+// TestHTTPStorageRateLimiting verifies that the HTTP backend properly handles
+// 429 Too Many Requests responses and returns storage.ErrTooManyRequests.
+func TestHTTPStorageRateLimiting(t *testing.T) {
+	// Create a test server with a memory bucket backend
+	server := httptest.NewServer(
+		storagehttp.BucketHandler(new(memory.Bucket)),
+	)
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	// Create HTTP client with rate-limiting transport
+	client := &http.Client{
+		Transport: &rateLimitingTransport{
+			transport: http.DefaultTransport,
+		},
+	}
+
+	// Create bucket with the rate-limiting client
+	bucket := storagehttp.NewBucket(server.URL, storagehttp.WithClient(client))
+
+	ctx := t.Context()
+
+	// Test GetObject returns ErrTooManyRequests
+	t.Run("GetObject", func(t *testing.T) {
+		_, _, err := bucket.GetObject(ctx, "test-key")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, storage.ErrTooManyRequests) {
+			t.Errorf("expected ErrTooManyRequests, got: %v", err)
+		}
+		// Verify error message includes context
+		if !strings.Contains(err.Error(), "429") {
+			t.Errorf("expected error message to contain status code 429, got: %v", err)
+		}
+	})
+
+	// Test PutObject returns ErrTooManyRequests
+	t.Run("PutObject", func(t *testing.T) {
+		_, err := bucket.PutObject(ctx, "test-key", strings.NewReader("test-value"))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, storage.ErrTooManyRequests) {
+			t.Errorf("expected ErrTooManyRequests, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "429") {
+			t.Errorf("expected error message to contain status code 429, got: %v", err)
+		}
+	})
+
+	// Test HeadObject returns ErrTooManyRequests
+	t.Run("HeadObject", func(t *testing.T) {
+		_, err := bucket.HeadObject(ctx, "test-key")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, storage.ErrTooManyRequests) {
+			t.Errorf("expected ErrTooManyRequests, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "429") {
+			t.Errorf("expected error message to contain status code 429, got: %v", err)
+		}
+	})
+
+	// Test DeleteObject returns ErrTooManyRequests
+	t.Run("DeleteObject", func(t *testing.T) {
+		err := bucket.DeleteObject(ctx, "test-key")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, storage.ErrTooManyRequests) {
+			t.Errorf("expected ErrTooManyRequests, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "429") {
+			t.Errorf("expected error message to contain status code 429, got: %v", err)
+		}
+	})
+
+	// Test ListObjects returns ErrTooManyRequests
+	t.Run("ListObjects", func(t *testing.T) {
+		for _, err := range bucket.ListObjects(ctx) {
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, storage.ErrTooManyRequests) {
+				t.Errorf("expected ErrTooManyRequests, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "429") {
+				t.Errorf("expected error message to contain status code 429, got: %v", err)
+			}
+			break // Only check the first error
+		}
+	})
+
+	// Test Access/Create returns ErrTooManyRequests
+	t.Run("Access", func(t *testing.T) {
+		err := bucket.Access(ctx)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, storage.ErrTooManyRequests) {
+			t.Errorf("expected ErrTooManyRequests, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "429") {
+			t.Errorf("expected error message to contain status code 429, got: %v", err)
+		}
+	})
 }

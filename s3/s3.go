@@ -725,6 +725,8 @@ func makeIcebergError(err error) error {
 		switch apiError.ErrorCode() {
 		case "PreconditionFailed", "ConditionalRequestConflict":
 			return errors.Join(storage.ErrObjectNotMatch, err)
+		case "TooManyRequestsException", "SlowDown", "503 SlowDown":
+			return errors.Join(storage.ErrTooManyRequests, err)
 		}
 	}
 	return err

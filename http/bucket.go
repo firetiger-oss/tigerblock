@@ -471,6 +471,8 @@ func makeIcebergError(req *http.Request, res *http.Response, err error) error {
 		err = storage.ErrBucketExist
 	case http.StatusForbidden:
 		err = storage.ErrBucketReadOnly
+	case http.StatusTooManyRequests:
+		err = storage.ErrTooManyRequests
 	default:
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
 		err = errors.New(string(b))
