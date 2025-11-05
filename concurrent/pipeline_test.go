@@ -146,6 +146,7 @@ func TestPipeline(t *testing.T) {
 
 	t.Run("respects context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
 		seq := func(yield func(int, error) bool) {
 			for i := 0; i < 100; i++ {
@@ -268,6 +269,7 @@ func TestExec(t *testing.T) {
 
 	t.Run("respects context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
 		tasks := make([]func(context.Context) error, 100)
 		for i := range tasks {
@@ -414,6 +416,7 @@ func TestQuery(t *testing.T) {
 
 	t.Run("respects context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
 		queries := make([]func(context.Context) (int, error), 100)
 		for i := range queries {
