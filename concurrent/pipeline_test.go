@@ -12,7 +12,7 @@ import (
 
 func TestPipeline(t *testing.T) {
 	t.Run("processes items concurrently", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 3)
+		ctx := concurrent.WithLimit(t.Context(), 3)
 
 		// Create input sequence
 		seq := func(yield func(int, error) bool) {
@@ -50,7 +50,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("maintains ordering", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 5)
+		ctx := concurrent.WithLimit(t.Context(), 5)
 
 		seq := func(yield func(int, error) bool) {
 			for i := 0; i < 100; i++ {
@@ -79,7 +79,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("propagates input errors", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		expectedErr := errors.New("input error")
 
 		seq := func(yield func(int, error) bool) {
@@ -113,7 +113,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("propagates transform errors", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		expectedErr := errors.New("transform error")
 
 		seq := func(yield func(int, error) bool) {
@@ -145,7 +145,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("respects context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		seq := func(yield func(int, error) bool) {
@@ -176,7 +176,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("respects concurrency limit", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 3)
+		ctx := concurrent.WithLimit(t.Context(), 3)
 		var activeCount atomic.Int32
 		var maxActive atomic.Int32
 
@@ -216,7 +216,7 @@ func TestPipeline(t *testing.T) {
 
 func TestExec(t *testing.T) {
 	t.Run("executes all tasks", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		var count atomic.Int32
 
 		task := func(ctx context.Context) error {
@@ -247,7 +247,7 @@ func TestExec(t *testing.T) {
 	})
 
 	t.Run("returns errors from tasks", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		expectedErr := errors.New("task error")
 
 		tasks := []func(context.Context) error{
@@ -268,7 +268,7 @@ func TestExec(t *testing.T) {
 	})
 
 	t.Run("respects context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		tasks := make([]func(context.Context) error, 100)
@@ -294,7 +294,7 @@ func TestExec(t *testing.T) {
 	})
 
 	t.Run("executes with concurrency limit", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 2)
+		ctx := concurrent.WithLimit(t.Context(), 2)
 		var activeCount atomic.Int32
 		var maxActive atomic.Int32
 
@@ -330,7 +330,7 @@ func TestExec(t *testing.T) {
 
 func TestQuery(t *testing.T) {
 	t.Run("executes all queries", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		queries := []func(context.Context) (int, error){
 			func(ctx context.Context) (int, error) { return 1, nil },
@@ -359,7 +359,7 @@ func TestQuery(t *testing.T) {
 	})
 
 	t.Run("returns errors from queries", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		expectedErr := errors.New("query error")
 
 		queries := []func(context.Context) (string, error){
@@ -390,7 +390,7 @@ func TestQuery(t *testing.T) {
 	})
 
 	t.Run("maintains query ordering", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 5)
+		ctx := concurrent.WithLimit(t.Context(), 5)
 
 		queries := make([]func(context.Context) (int, error), 50)
 		for i := range queries {
@@ -415,7 +415,7 @@ func TestQuery(t *testing.T) {
 	})
 
 	t.Run("respects context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		queries := make([]func(context.Context) (int, error), 100)
@@ -442,7 +442,7 @@ func TestQuery(t *testing.T) {
 	})
 
 	t.Run("works with different types", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		type result struct {
 			id    int
@@ -479,7 +479,7 @@ func TestQuery(t *testing.T) {
 	})
 
 	t.Run("respects concurrency limit", func(t *testing.T) {
-		ctx := concurrent.WithLimit(context.Background(), 3)
+		ctx := concurrent.WithLimit(t.Context(), 3)
 		var activeCount atomic.Int32
 		var maxActive atomic.Int32
 
@@ -513,7 +513,7 @@ func TestQuery(t *testing.T) {
 }
 
 func BenchmarkPipeline(b *testing.B) {
-	ctx := concurrent.WithLimit(context.Background(), 10)
+	ctx := concurrent.WithLimit(b.Context(), 10)
 
 	b.Run("small_transform", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -556,7 +556,7 @@ func BenchmarkPipeline(b *testing.B) {
 }
 
 func BenchmarkExec(b *testing.B) {
-	ctx := concurrent.WithLimit(context.Background(), 10)
+	ctx := concurrent.WithLimit(b.Context(), 10)
 
 	b.Run("simple_tasks", func(b *testing.B) {
 		tasks := make([]func(context.Context) error, 100)
@@ -575,7 +575,7 @@ func BenchmarkExec(b *testing.B) {
 }
 
 func BenchmarkQuery(b *testing.B) {
-	ctx := concurrent.WithLimit(context.Background(), 10)
+	ctx := concurrent.WithLimit(b.Context(), 10)
 
 	b.Run("simple_queries", func(b *testing.B) {
 		queries := make([]func(context.Context) (int, error), 100)
