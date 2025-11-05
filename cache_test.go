@@ -547,6 +547,7 @@ func TestCacheStatWithPageCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get object with byte range: %v", err)
 	}
+	io.Copy(io.Discard, reader)
 	reader.Close()
 
 	// Get stats after page caching
@@ -567,6 +568,7 @@ func TestCacheStatWithPageCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get object with overlapping byte range: %v", err)
 	}
+	io.Copy(io.Discard, reader2)
 	reader2.Close()
 
 	// Get final stats

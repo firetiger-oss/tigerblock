@@ -2,12 +2,14 @@ package storage
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"iter"
 	"time"
 
 	"github.com/firetiger-oss/storage/cache"
+	"github.com/firetiger-oss/storage/concurrent"
 )
 
 const (
@@ -47,7 +49,7 @@ func ObjectPageCacheSize(size int64) CacheOption {
 
 // Cache is an in-memory cache for objects read from a Bucket.
 type Cache struct {
-	pages    cache.LRU[objectRange, []byte]
+	pages    cache.LRU[objectRange, cachedObject]
 	infos    cache.LRU[string, ObjectInfo]
 	objects  cache.LRU[string, cachedObject]
 	pageSize int64
@@ -65,7 +67,7 @@ type objectRange struct {
 // cache is 512KiB. The page size for byte ranges is set to 256KiB.
 func NewCache(options ...CacheOption) *Cache {
 	cache := &Cache{
-		pages: cache.LRU[objectRange, []byte]{
+		pages: cache.LRU[objectRange, cachedObject]{
 			Limit: DefaultObjectPageCacheSize,
 		},
 		infos: cache.LRU[string, ObjectInfo]{
@@ -144,7 +146,6 @@ func (c *cachedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, 
 func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...GetOption) (io.ReadCloser, ObjectInfo, error) {
 	var getOptions = NewGetOptions(options...)
 	var object cachedObject
-	var hit bool
 	var err error
 
 	if getOptions.byteRange {
@@ -155,62 +156,101 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		if err := ValidObjectRange(key, getOptions.start, getOptions.end); err != nil {
 			return nil, ObjectInfo{}, err
 		}
-		object, hit = c.objects.Peek(key)
-		if hit {
-			goto done
-		}
-		info, ok := c.infos.Peek(key)
-		if ok && info.Size <= c.pageSize {
-			goto load
-		} else if !ok {
-			info, err = c.HeadObject(ctx, key)
-			if err != nil {
-				return nil, ObjectInfo{}, err
-			}
-		}
 
-		startPageIndex := int(getOptions.start / pageSize)
-		maxPageIndex := max(0, int((info.Size-1)/pageSize))
-		endPageIndex := min(maxPageIndex, int(getOptions.end/pageSize))
-		pageCount := endPageIndex - startPageIndex + 1
-		promises := make([]*cache.Promise[[]byte], pageCount)
+		ctx, cancel := context.WithCancel(ctx)
+		pages := make(chan cachedObject)
+		errch := make(chan error, 1)
 
-		for i := range promises {
-			thisPageIndex := startPageIndex + i
-			thisByteStart := int64(thisPageIndex) * pageSize
-			thisByteEnd := min(thisByteStart+pageSize, info.Size) - 1
-			thisPageKey := objectRange{object: key, page: thisPageIndex}
-			promises[i] = c.pages.Get(thisPageKey, func() (int64, []byte, error) {
-				reader, _, err := c.bucket.GetObject(ctx, key, BytesRange(thisByteStart, thisByteEnd))
+		go func() {
+			defer close(errch)
+			defer close(pages)
+
+			for page, err := range concurrent.Pipeline(ctx,
+				func(yield func(objectRange, error) bool) {
+					startPageIndex := int(getOptions.start / pageSize)
+					endPageIndex := int(getOptions.end / pageSize)
+
+					for i := startPageIndex; i <= endPageIndex; i++ {
+						if !yield(objectRange{object: key, page: i}, nil) {
+							return
+						}
+						if i == startPageIndex && i+1 < endPageIndex {
+							info, err := c.HeadObject(ctx, key)
+							if err != nil {
+								yield(objectRange{}, err)
+								return
+							}
+							maxPageIndex := max(0, int((info.Size-1)/pageSize))
+							endPageIndex = min(endPageIndex, maxPageIndex)
+						}
+					}
+				},
+
+				func(ctx context.Context, thisPageKey objectRange) (cachedObject, error) {
+					return c.pages.Load(thisPageKey, func() (int64, cachedObject, error) {
+						thisPageStart := int64(thisPageKey.page) * pageSize
+						thisPageEnd := thisPageStart + pageSize - 1
+						body, info, err := c.bucket.GetObject(ctx, thisPageKey.object,
+							BytesRange(thisPageStart, thisPageEnd))
+						if err != nil {
+							return 0, cachedObject{}, err
+						}
+						defer body.Close()
+						pageLength := thisPageEnd - thisPageStart + 1
+						page := make([]byte, min(pageLength, info.Size-thisPageStart))
+						if _, err := io.ReadFull(body, page); err != nil {
+							return 0, cachedObject{}, err
+						}
+						object := cachedObject{
+							info: info,
+							body: page,
+						}
+						size := int64(0)
+						size += int64(len(thisPageKey.object))
+						size += int64(len(object.body))
+						size += sizeOfObjectInfo(object.info)
+						return size, object, nil
+					})
+				},
+			) {
 				if err != nil {
-					return 0, nil, err
+					errch <- err
+					return
+				} else {
+					select {
+					case pages <- page:
+					case <-ctx.Done():
+						errch <- context.Cause(ctx)
+						return
+					}
 				}
-				defer reader.Close()
-				page := make([]byte, thisByteEnd-thisByteStart+1)
-				if _, err := io.ReadFull(reader, page); err != nil {
-					return 0, nil, err
-				}
-				return int64(len(page)), page, nil
-			})
-		}
-
-		offset := getOptions.start % pageSize
-		length := (getOptions.end + 1) - getOptions.start
-		pages := make([]io.Reader, len(promises))
-
-		for i, promise := range promises {
-			page, err := promise.Wait()
-			if err != nil {
-				return nil, ObjectInfo{}, err
 			}
-			pages[i] = bytes.NewReader(page[offset:])
-			offset = 0
-		}
+		}()
 
-		return io.NopCloser(io.LimitReader(io.MultiReader(pages...), length)), info, nil
+		select {
+		case firstPage, ok := <-pages:
+			if !ok {
+				return nil, ObjectInfo{}, <-errch
+			}
+			offset := getOptions.start % pageSize
+			length := getOptions.end - getOptions.start + 1
+			firstPage.body = firstPage.body[offset:]
+			firstPage.body = firstPage.body[:min(length, int64(len(firstPage.body)))]
+			return &cachedPageReader{
+				currentPage: firstPage,
+				nextPages:   pages,
+				nextErrors:  errch,
+				remain:      length - int64(len(firstPage.body)),
+				cancel:      cancel,
+			}, firstPage.info, nil
+		case <-ctx.Done():
+			cancel()
+			for range pages {
+			}
+			return nil, ObjectInfo{}, context.Cause(ctx)
+		}
 	}
 
-load:
 	object, err = c.objects.Load(key, func() (int64, cachedObject, error) {
 		var object cachedObject
 		reader, info, err := c.bucket.GetObject(ctx, key)
@@ -233,7 +273,6 @@ load:
 		return nil, ObjectInfo{}, err
 	}
 
-done:
 	body := object.body
 	if getOptions.byteRange {
 		body = body[:min(getOptions.end+1, int64(len(body)))]
@@ -311,4 +350,48 @@ func sizeOfObjectInfo(info ObjectInfo) (size int64) {
 	size += int64(len(info.ContentEncoding))
 	size += int64(len(info.ETag))
 	return
+}
+
+type cachedPageReader struct {
+	currentPage cachedObject
+	nextPages   <-chan cachedObject
+	nextErrors  <-chan error
+	remain      int64
+	cancel      context.CancelFunc
+}
+
+func (r *cachedPageReader) Read(p []byte) (int, error) {
+	for {
+		if len(r.currentPage.body) != 0 {
+			n := copy(p, r.currentPage.body)
+			r.currentPage.body = r.currentPage.body[n:]
+			return n, nil
+		}
+		if r.remain <= 0 {
+			return 0, io.EOF
+		}
+		select {
+		case nextPage, ok := <-r.nextPages:
+			if !ok {
+				return 0, cmp.Or(<-r.nextErrors, io.EOF)
+			}
+			// Truncate the next page to not exceed remain
+			pageSize := int64(len(nextPage.body))
+			if pageSize > r.remain {
+				nextPage.body = nextPage.body[:r.remain]
+				pageSize = r.remain
+			}
+			r.remain -= pageSize
+			r.currentPage = nextPage
+		case err := <-r.nextErrors:
+			return 0, err
+		}
+	}
+}
+
+func (r *cachedPageReader) Close() error {
+	r.cancel()
+	for range r.nextPages {
+	}
+	return nil
 }
