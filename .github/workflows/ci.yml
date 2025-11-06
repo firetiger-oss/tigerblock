@@ -12,17 +12,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
-        go: [ '1.24' ]
+        os: [ ubuntu, macos ]
+        include:
+          - os: ubuntu
+            runner: blacksmith-8vcpu-ubuntu-2204
+          - os: macos
+            runner: macos-latest
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: useblacksmith/setup-go@v6
+        if: matrix.os == 'ubuntu'
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: go.mod
+
+      - uses: actions/setup-go@v5
+        if: matrix.os == 'macos'
+        with:
+          go-version-file: go.mod
 
       - name: fmt
         run: test -z $(gofmt -l . | head -n 1) || ( gofmt -d . ; exit 1 )
