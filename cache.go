@@ -158,7 +158,6 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		}
 
 		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
 		pages := make(chan cachedObject)
 		errch := make(chan error, 1)
 
@@ -231,6 +230,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		select {
 		case firstPage, ok := <-pages:
 			if !ok {
+				cancel()
 				return nil, ObjectInfo{}, <-errch
 			}
 			offset := getOptions.start % pageSize
@@ -245,6 +245,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 				cancel:      cancel,
 			}, firstPage.info, nil
 		case <-ctx.Done():
+			cancel()
 			for range pages {
 			}
 			return nil, ObjectInfo{}, context.Cause(ctx)
