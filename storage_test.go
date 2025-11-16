@@ -382,6 +382,7 @@ func TestDeleteObjectsContextCancellation(t *testing.T) {
 
 	t.Run("cancel during deletion", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 
 		keys := make([]string, 100)
 		for i := 0; i < 100; i++ {
