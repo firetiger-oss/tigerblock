@@ -1,3 +1,7 @@
+// Package sequtil provides utility functions for working with sequences.
+// It exposes APIs similar to those in the standard slices package,
+// but for iterators with two type parameters, with the second being an error,
+// i.e., iter.Seq2[T, error].
 package sequtil
 
 import (
