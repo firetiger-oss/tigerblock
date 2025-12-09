@@ -110,8 +110,8 @@ func (w *headResponseWriter) flush() {
 	w.base.WriteHeader(status)
 }
 
-func makeKey(path string) string {
-	return strings.TrimPrefix(path, "/")
+func makeKey(r *http.Request) string {
+	return strings.TrimPrefix(r.URL.EscapedPath(), "/")
 }
 
 func handleHEAD(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *HandlerOptions) {
@@ -121,7 +121,7 @@ func handleHEAD(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Han
 		head.flush()
 	} else {
 		if h.presignRedirect {
-			presignedURL, err := b.PresignHeadObject(r.Context(), makeKey(r.URL.Path))
+			presignedURL, err := b.PresignHeadObject(r.Context(), makeKey(r))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -131,7 +131,7 @@ func handleHEAD(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Han
 			return
 		}
 
-		if object, err := b.HeadObject(r.Context(), makeKey(r.URL.Path)); err != nil {
+		if object, err := b.HeadObject(r.Context(), makeKey(r)); err != nil {
 			writeError(w, err)
 		} else {
 			header := w.Header()
@@ -282,7 +282,7 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		}
 
 		if h.presignRedirect {
-			presignedURL, err := b.PresignGetObject(r.Context(), makeKey(r.URL.Path), time.Hour, options...)
+			presignedURL, err := b.PresignGetObject(r.Context(), makeKey(r), time.Hour, options...)
 			if err != nil {
 				writeError(w, err)
 				return
@@ -292,7 +292,7 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 			return
 		}
 
-		reader, object, err := b.GetObject(r.Context(), makeKey(r.URL.Path), options...)
+		reader, object, err := b.GetObject(r.Context(), makeKey(r), options...)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -341,7 +341,7 @@ func handlePUT(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 	}
 
 	if h.presignRedirect {
-		presignedURL, err := b.PresignPutObject(r.Context(), makeKey(r.URL.Path), time.Hour, options...)
+		presignedURL, err := b.PresignPutObject(r.Context(), makeKey(r), time.Hour, options...)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -351,7 +351,7 @@ func handlePUT(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		return
 	}
 
-	object, err := b.PutObject(r.Context(), makeKey(r.URL.Path), r.Body, options...)
+	object, err := b.PutObject(r.Context(), makeKey(r), r.Body, options...)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -405,7 +405,7 @@ func handlePOST(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Han
 func handleDELETE(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *HandlerOptions) {
 	if r.URL.Path != "/" {
 		if h.presignRedirect {
-			presignedURL, err := b.PresignDeleteObject(r.Context(), makeKey(r.URL.Path))
+			presignedURL, err := b.PresignDeleteObject(r.Context(), makeKey(r))
 			if err != nil {
 				writeError(w, err)
 				return
@@ -415,7 +415,7 @@ func handleDELETE(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *H
 			return
 		}
 
-		if err := b.DeleteObject(r.Context(), makeKey(r.URL.Path)); err != nil {
+		if err := b.DeleteObject(r.Context(), makeKey(r)); err != nil {
 			writeError(w, err)
 		}
 	} else {
