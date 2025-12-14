@@ -32,6 +32,7 @@ func init() {
 	rootCmd.AddCommand(statCmd)
 	rootCmd.AddCommand(cpCmd)
 	rootCmd.AddCommand(rmCmd)
+	rootCmd.AddCommand(serveCmd)
 }
 
 func main() {

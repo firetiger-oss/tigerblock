@@ -7,9 +7,28 @@ import (
 	"testing"
 
 	"github.com/firetiger-oss/storage/secret"
+	"github.com/firetiger-oss/storage/test"
 )
 
-func TestManager_Get(t *testing.T) {
+// TestManager runs the comprehensive test suite against the env backend.
+// Since env is read-only, most write tests will be skipped.
+func TestManager(t *testing.T) {
+	// Set up some test environment variables
+	os.Setenv("TEST_SECRET_1", "value1")
+	os.Setenv("TEST_SECRET_2", "value2")
+	os.Setenv("TEST_OTHER", "value3")
+	defer func() {
+		os.Unsetenv("TEST_SECRET_1")
+		os.Unsetenv("TEST_SECRET_2")
+		os.Unsetenv("TEST_OTHER")
+	}()
+
+	test.TestManager(t, func(t *testing.T) (secret.Manager, error) {
+		return NewManager(), nil
+	})
+}
+
+func TestManagerGet(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 
@@ -31,7 +50,7 @@ func TestManager_Get(t *testing.T) {
 	}
 }
 
-func TestManager_Get_NotFound(t *testing.T) {
+func TestManagerGetNotFound(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 
@@ -45,7 +64,7 @@ func TestManager_Get_NotFound(t *testing.T) {
 	}
 }
 
-func TestManager_List(t *testing.T) {
+func TestManagerList(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 
@@ -82,7 +101,7 @@ func TestManager_List(t *testing.T) {
 	}
 }
 
-func TestManager_List_MaxResults(t *testing.T) {
+func TestManagerListMaxResults(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 
@@ -109,7 +128,7 @@ func TestManager_List_MaxResults(t *testing.T) {
 	}
 }
 
-func TestManager_WriteOperationsReturnReadOnly(t *testing.T) {
+func TestManagerWriteOperationsReturnReadOnly(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 
@@ -152,7 +171,7 @@ func TestManager_WriteOperationsReturnReadOnly(t *testing.T) {
 	}
 }
 
-func TestManager_VersionOperationsNotSupported(t *testing.T) {
+func TestManagerVersionOperationsNotSupported(t *testing.T) {
 	ctx := context.Background()
 	manager := NewManager()
 

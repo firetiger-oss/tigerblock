@@ -11,16 +11,14 @@ import (
 	"github.com/firetiger-oss/storage/secret"
 )
 
-// testCredentials is a test type implementing Credentials.
 type testCredentials struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Role     string `json:"role"`
 }
 
-// Validate implements Credentials.
-func (c testCredentials) Validate(password string) bool {
-	return c.Password == password
+func (c testCredentials) Validate(username, password string) bool {
+	return c.Username == username && c.Password == password
 }
 
 func TestAuthenticatorFunc(t *testing.T) {

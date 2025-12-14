@@ -9,8 +9,8 @@ import (
 )
 
 // Registry is an interface for loading secret managers from identifiers.
-// Each backend (AWS, GCP, env) implements a Registry to create
-// Manager instances from native resource identifiers (ARNs, resource names, etc).
+// Each backend (AWS, GCP, env) implements a Registry to create Manager
+// instances from native resource identifiers (ARNs, resource names, etc).
 type Registry interface {
 	// LoadManager loads a manager from a secret identifier.
 	// The identifier can be a full secret path or just a manager identifier.
@@ -29,10 +29,10 @@ func (reg RegistryFunc) LoadManager(ctx context.Context, identifier string) (Man
 	return reg(ctx, identifier)
 }
 
-// ParseSecret is a default implementation that returns an error.
-// Backends should provide their own implementation.
+// ParseSecret is a default implementation that returns an empty manager ID
+// and uses the identifier as the secret name.
 func (reg RegistryFunc) ParseSecret(identifier string) (string, string, error) {
-	return "", "", fmt.Errorf("ParseSecret not implemented for this registry")
+	return "", identifier, nil
 }
 
 type registryEntry struct {
@@ -160,7 +160,8 @@ func LoadManagerAt(ctx context.Context, registry Registry, identifier string) (M
 //
 // Example:
 //
-//	info, err := secret.Create(ctx, "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password",
+//	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
+//	info, err := secret.Create(ctx, secretARN,
 //		secret.Value("secret-value"),
 //		secret.Tag("env", "production"))
 func Create(ctx context.Context, secretID string, value Value, options ...CreateOption) (Info, error) {
@@ -190,7 +191,8 @@ func CreateAt(ctx context.Context, registry Registry, secretID string, value Val
 //
 // Example:
 //
-//	value, info, err := secret.Get(ctx, "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password")
+//	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
+//	value, info, err := secret.Get(ctx, secretARN)
 func Get(ctx context.Context, secretID string, options ...GetOption) (Value, Info, error) {
 	return GetAt(ctx, DefaultRegistry(), secretID, options...)
 }
@@ -218,8 +220,8 @@ func GetAt(ctx context.Context, registry Registry, secretID string, options ...G
 //
 // Example:
 //
-//	info, err := secret.Update(ctx, "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password",
-//		secret.Value("new-secret-value"))
+//	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
+//	info, err := secret.Update(ctx, secretARN, secret.Value("new-value"))
 func Update(ctx context.Context, secretID string, value Value, options ...UpdateOption) (Info, error) {
 	return UpdateAt(ctx, DefaultRegistry(), secretID, value, options...)
 }
@@ -247,7 +249,8 @@ func UpdateAt(ctx context.Context, registry Registry, secretID string, value Val
 //
 // Example:
 //
-//	err := secret.Delete(ctx, "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password")
+//	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
+//	err := secret.Delete(ctx, secretARN)
 func Delete(ctx context.Context, secretID string) error {
 	return DeleteAt(ctx, DefaultRegistry(), secretID)
 }
@@ -275,7 +278,8 @@ func DeleteAt(ctx context.Context, registry Registry, secretID string) error {
 //
 // Example:
 //
-//	for s, err := range secret.List(ctx, "arn:aws:secretsmanager:us-east-1:123456789012", secret.NamePrefix("db-")) {
+//	managerARN := "arn:aws:secretsmanager:us-east-1:123456789012"
+//	for s, err := range secret.List(ctx, managerARN, secret.NamePrefix("db-")) {
 //		if err != nil {
 //			return err
 //		}

@@ -61,7 +61,7 @@ func TestLoadManager(t *testing.T) {
 	}
 }
 
-func TestLoadManager_NoMatch(t *testing.T) {
+func TestLoadManagerNoMatch(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -84,7 +84,7 @@ func TestLoadManager_NoMatch(t *testing.T) {
 	}
 }
 
-func TestLoadManager_Empty(t *testing.T) {
+func TestLoadManagerEmpty(t *testing.T) {
 	ctx := context.Background()
 	_, err := LoadManager(ctx, "")
 	if err == nil {
@@ -96,7 +96,7 @@ func TestLoadManager_Empty(t *testing.T) {
 	}
 }
 
-func TestCreate_GlobalFunction(t *testing.T) {
+func TestCreateGlobalFunction(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -127,7 +127,7 @@ func TestCreate_GlobalFunction(t *testing.T) {
 	}
 }
 
-func TestGet_GlobalFunction(t *testing.T) {
+func TestGetGlobalFunction(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -160,7 +160,7 @@ func TestGet_GlobalFunction(t *testing.T) {
 	}
 }
 
-func TestUpdate_GlobalFunction(t *testing.T) {
+func TestUpdateGlobalFunction(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -193,7 +193,7 @@ func TestUpdate_GlobalFunction(t *testing.T) {
 	}
 }
 
-func TestDelete_GlobalFunction(t *testing.T) {
+func TestDeleteGlobalFunction(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -222,7 +222,7 @@ func TestDelete_GlobalFunction(t *testing.T) {
 	}
 }
 
-func TestList_GlobalFunction(t *testing.T) {
+func TestListGlobalFunction(t *testing.T) {
 	globalMutex.Lock()
 	originalRegistries := globalRegistries
 	globalRegistries = nil
@@ -336,17 +336,15 @@ func (r *mockRegistry) LoadManager(ctx context.Context, identifier string) (Mana
 
 func (r *mockRegistry) ParseSecret(identifier string) (string, string, error) {
 	// Simple parsing: test://location/name
-	if !strings.HasPrefix(identifier, "test://") {
+	rest, ok := strings.CutPrefix(identifier, "test://")
+	if !ok {
 		return "", "", fmt.Errorf("invalid test identifier")
 	}
-	rest := strings.TrimPrefix(identifier, "test://")
-	// Split into location/name
-	parts := strings.SplitN(rest, "/", 2)
-	if len(parts) < 2 {
+	location, secretName, ok := strings.Cut(rest, "/")
+	if !ok {
 		// No secret name, just manager
 		return identifier, "", nil
 	}
-	managerID := "test://" + parts[0]
-	secretName := parts[1]
+	managerID := "test://" + location
 	return managerID, secretName, nil
 }

@@ -5,6 +5,7 @@ package test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,12 +35,10 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 	tests := []struct {
 		scenario string
 		function func(*testing.T, secret.Manager)
-		skipIf   func(secret.Manager) (bool, string)
 	}{
 		{
 			scenario: "creating and retrieving a secret works",
-			function: testCreateAndGet,
-			skipIf:   skipIfReadOnly,
+			function: skipIfReadOnly(testCreateAndGet),
 		},
 		{
 			scenario: "getting a non-existent secret returns error",
@@ -47,23 +46,19 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 		},
 		{
 			scenario: "creating a duplicate secret returns error",
-			function: testCreateDuplicate,
-			skipIf:   skipIfReadOnly,
+			function: skipIfReadOnly(testCreateDuplicate),
 		},
 		{
 			scenario: "updating a secret works",
-			function: testUpdate,
-			skipIf:   skipIfReadOnly,
+			function: skipIfReadOnly(testUpdate),
 		},
 		{
 			scenario: "deleting a secret works",
-			function: testDelete,
-			skipIf:   skipIfReadOnly,
+			function: skipIfReadOnly(testDelete),
 		},
 		{
 			scenario: "delete is idempotent",
-			function: testDeleteIdempotent,
-			skipIf:   skipIfReadOnly,
+			function: skipIfReadOnly(testDeleteIdempotent),
 		},
 		{
 			scenario: "listing secrets works",
@@ -79,17 +74,51 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 		},
 		{
 			scenario: "creating secret with tags",
-			function: testCreateWithTags,
-			skipIf:   skipIfReadOnlyOrNoTags,
+			function: skipIfReadOnlyOrNoTags(testCreateWithTags),
 		},
 		{
 			scenario: "filtering secrets by tags",
-			function: testListWithTagFilter,
-			skipIf:   skipIfReadOnlyOrNoTags,
+			function: skipIfReadOnlyOrNoTags(testListWithTagFilter),
 		},
 		{
 			scenario: "context cancellation is respected",
 			function: testContextCancellation,
+		},
+		{
+			scenario: "listing secret versions works",
+			function: skipIfReadOnly(testListSecretVersions),
+		},
+		{
+			scenario: "getting a specific secret version",
+			function: skipIfReadOnly(testGetSecretVersion),
+		},
+		{
+			scenario: "getting non-existent version returns error",
+			function: testGetSecretVersionNotFound,
+		},
+		{
+			scenario: "destroying a secret version",
+			function: skipIfReadOnlyOrNoDestroy(testDestroySecretVersion),
+		},
+		{
+			scenario: "getting secret with version option",
+			function: skipIfReadOnly(testGetSecretWithVersion),
+		},
+		{
+			scenario: "updating secret with description",
+			function: skipIfReadOnly(testUpdateSecretWithDescription),
+		},
+		{
+			scenario: "creating secret with description",
+			function: skipIfReadOnly(testCreateSecretWithDescription),
+		},
+		{
+			scenario: "updating non-existent secret returns error",
+			function: skipIfReadOnly(testUpdateNonExistent),
+		},
+		{
+			scenario: "listing with multiple filters",
+			function: skipIfReadOnlyOrNoTags(testListWithMultipleFilters),
 		},
 	}
 
@@ -101,13 +130,6 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 					if err != nil {
 						t.Fatal("unexpected error loading manager:", err)
 					}
-
-					if test.skipIf != nil {
-						if skip, reason := test.skipIf(manager); skip {
-							t.Skip(reason)
-						}
-					}
-
 					manager = adapter.adapter.AdaptManager(manager)
 					test.function(t, manager)
 				})
@@ -116,47 +138,78 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 	}
 }
 
-func skipIfReadOnly(m secret.Manager) (bool, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := m.CreateSecret(ctx, "test-readonly-check-"+randomString(), []byte("value"))
-	if errors.Is(err, secret.ErrReadOnly) {
-		return true, "backend is read-only"
+func skipIfReadOnly(test func(*testing.T, secret.Manager)) func(*testing.T, secret.Manager) {
+	return func(t *testing.T, m secret.Manager) {
+		ctx := t.Context()
+		testName := "test-readonly-check-" + randomString()
+		_, err := m.CreateSecret(ctx, testName, []byte("value"))
+		if errors.Is(err, secret.ErrReadOnly) {
+			t.Skip("backend is read-only")
+		}
+		if err == nil {
+			_ = m.DeleteSecret(ctx, testName)
+		}
+		test(t, m)
 	}
-	// Clean up if successful
-	if err == nil {
-		_ = m.DeleteSecret(ctx, "test-readonly-check-"+randomString())
-	}
-	return false, ""
 }
 
-func skipIfReadOnlyOrNoTags(m secret.Manager) (bool, string) {
-	// For read-only backends or backends without tag support,
-	// we skip the tag tests
-	if skip, reason := skipIfReadOnly(m); skip {
-		return skip, reason
+func skipIfReadOnlyOrNoTags(test func(*testing.T, secret.Manager)) func(*testing.T, secret.Manager) {
+	return func(t *testing.T, m secret.Manager) {
+		ctx := t.Context()
+
+		// Check read-only first
+		testName := "test-readonly-check-" + randomString()
+		_, err := m.CreateSecret(ctx, testName, []byte("value"))
+		if errors.Is(err, secret.ErrReadOnly) {
+			t.Skip("backend is read-only")
+		}
+		if err == nil {
+			_ = m.DeleteSecret(ctx, testName)
+		}
+
+		// Check tag support
+		testName = "test-tag-support-" + randomString()
+		_, err = m.CreateSecret(ctx, testName, []byte("test"), secret.Tag("test", "value"))
+		if err == nil {
+			_ = m.DeleteSecret(ctx, testName)
+		}
+
+		test(t, m)
 	}
+}
 
-	// Try creating a secret with tags to see if they're supported
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func skipIfReadOnlyOrNoDestroy(test func(*testing.T, secret.Manager)) func(*testing.T, secret.Manager) {
+	return func(t *testing.T, m secret.Manager) {
+		ctx := t.Context()
 
-	testName := "test-tag-support-" + randomString()
-	_, err := m.CreateSecret(ctx, testName, []byte("test"), secret.Tag("test", "value"))
-	if err == nil {
-		// Clean up the test secret
-		_ = m.DeleteSecret(ctx, testName)
-		return false, "" // Tags are supported
+		// Check read-only first
+		testName := "test-readonly-check-" + randomString()
+		_, err := m.CreateSecret(ctx, testName, []byte("value"))
+		if errors.Is(err, secret.ErrReadOnly) {
+			t.Skip("backend is read-only")
+		}
+		if err == nil {
+			_ = m.DeleteSecret(ctx, testName)
+		}
+
+		// Check destroy support
+		err = m.DestroySecretVersion(ctx, "nonexistent", "1")
+		if err != nil {
+			if strings.Contains(err.Error(), "not supported") {
+				t.Skip("backend does not support version destruction")
+			}
+			if !errors.Is(err, secret.ErrVersionNotFound) &&
+				!errors.Is(err, secret.ErrNotFound) {
+				t.Skip("backend does not support version destruction")
+			}
+		}
+
+		test(t, m)
 	}
-
-	// If we get here, assume no tag support (or other error)
-	// Most backends support tags, so this is rare
-	return false, ""
 }
 
 func testCreateAndGet(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-secret-" + randomString()
 	value := []byte("secret-value-" + randomString())
 
@@ -187,7 +240,7 @@ func testCreateAndGet(t *testing.T, manager secret.Manager) {
 }
 
 func testGetNotExist(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, _, err := manager.GetSecret(ctx, "nonexistent-secret-"+randomString())
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -199,7 +252,7 @@ func testGetNotExist(t *testing.T, manager secret.Manager) {
 }
 
 func testCreateDuplicate(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-duplicate-" + randomString()
 	value := []byte("value")
 
@@ -220,7 +273,7 @@ func testCreateDuplicate(t *testing.T, manager secret.Manager) {
 }
 
 func testUpdate(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-update-" + randomString()
 	initialValue := []byte("initial-value")
 	newValue := []byte("new-value")
@@ -247,7 +300,7 @@ func testUpdate(t *testing.T, manager secret.Manager) {
 }
 
 func testDelete(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-delete-" + randomString()
 	value := []byte("value")
 
@@ -272,7 +325,7 @@ func testDelete(t *testing.T, manager secret.Manager) {
 }
 
 func testDeleteIdempotent(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-delete-idempotent-" + randomString()
 
 	// Delete non-existent secret should not error (idempotent)
@@ -285,7 +338,7 @@ func testDeleteIdempotent(t *testing.T, manager secret.Manager) {
 }
 
 func testList(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	count := 0
 	for _, err := range manager.ListSecrets(ctx) {
@@ -300,7 +353,7 @@ func testList(t *testing.T, manager secret.Manager) {
 }
 
 func testListWithPrefix(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// For read-only backends, just test that prefix filtering works with existing vars
 	var secrets []secret.Secret
@@ -313,14 +366,14 @@ func testListWithPrefix(t *testing.T, manager secret.Manager) {
 
 	// All returned secrets should have the prefix
 	for _, s := range secrets {
-		if !hasPrefix(s.Name, "TEST_") {
+		if !strings.HasPrefix(s.Name, "TEST_") {
 			t.Errorf("secret %q does not have prefix TEST_", s.Name)
 		}
 	}
 }
 
 func testListWithMaxResults(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var secrets []secret.Secret
 	for s, err := range manager.ListSecrets(ctx, secret.MaxResults(5)) {
@@ -336,7 +389,7 @@ func testListWithMaxResults(t *testing.T, manager secret.Manager) {
 }
 
 func testCreateWithTags(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name := "test-tags-" + randomString()
 	value := []byte("value")
 	tags := map[string]string{
@@ -366,7 +419,7 @@ func testCreateWithTags(t *testing.T, manager secret.Manager) {
 }
 
 func testListWithTagFilter(t *testing.T, manager secret.Manager) {
-	ctx := context.Background()
+	ctx := t.Context()
 	name1 := "test-tag-filter-1-" + randomString()
 	name2 := "test-tag-filter-2-" + randomString()
 
@@ -409,7 +462,7 @@ func testListWithTagFilter(t *testing.T, manager secret.Manager) {
 }
 
 func testContextCancellation(t *testing.T, manager secret.Manager) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // Cancel immediately
 
 	_, _, err := manager.GetSecret(ctx, "any-secret")
@@ -418,12 +471,274 @@ func testContextCancellation(t *testing.T, manager secret.Manager) {
 	}
 }
 
-// Helper functions
+func testListSecretVersions(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-versions-" + randomString()
+
+	// Create a secret
+	_, err := manager.CreateSecret(ctx, name, []byte("v1"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	// Update to create a second version
+	_, err = manager.UpdateSecret(ctx, name, []byte("v2"))
+	if err != nil {
+		t.Fatal("unexpected error updating secret:", err)
+	}
+
+	// List versions
+	var versions []secret.Version
+	for v, err := range manager.ListSecretVersions(ctx, name) {
+		if err != nil {
+			t.Fatal("unexpected error listing versions:", err)
+		}
+		versions = append(versions, v)
+	}
+
+	if len(versions) < 2 {
+		t.Errorf("expected at least 2 versions, got %d", len(versions))
+	}
+}
+
+func testGetSecretVersion(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-get-version-" + randomString()
+
+	// Create a secret with initial value
+	info, err := manager.CreateSecret(ctx, name, []byte("initial-value"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	initialVersion := info.Version
+
+	// Update to create a second version
+	_, err = manager.UpdateSecret(ctx, name, []byte("updated-value"))
+	if err != nil {
+		t.Fatal("unexpected error updating secret:", err)
+	}
+
+	// Get the initial version specifically
+	if initialVersion != "" {
+		value, _, err := manager.GetSecretVersion(ctx, name, initialVersion)
+		if err != nil {
+			t.Fatal("unexpected error getting version:", err)
+		}
+
+		if string(value) != "initial-value" {
+			t.Errorf("expected initial value, got %q", value)
+		}
+	}
+}
+
+func testGetSecretVersionNotFound(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+
+	_, _, err := manager.GetSecretVersion(ctx, "nonexistent-"+randomString(), "999")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Should return either ErrNotFound or ErrVersionNotFound
+	if !errors.Is(err, secret.ErrNotFound) && !errors.Is(err, secret.ErrVersionNotFound) {
+		t.Errorf("expected ErrNotFound or ErrVersionNotFound, got %v", err)
+	}
+}
+
+func testDestroySecretVersion(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-destroy-version-" + randomString()
+
+	// Create a secret
+	info, err := manager.CreateSecret(ctx, name, []byte("v1"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	firstVersion := info.Version
+
+	// Update to create a second version (so we have something to destroy)
+	_, err = manager.UpdateSecret(ctx, name, []byte("v2"))
+	if err != nil {
+		t.Fatal("unexpected error updating secret:", err)
+	}
+
+	// Destroy the first version
+	if firstVersion != "" {
+		err = manager.DestroySecretVersion(ctx, name, firstVersion)
+		if err != nil {
+			t.Fatal("unexpected error destroying version:", err)
+		}
+
+		// Verify the version is destroyed
+		_, _, err = manager.GetSecretVersion(ctx, name, firstVersion)
+		if err == nil {
+			t.Error("expected error getting destroyed version, got nil")
+		}
+	}
+}
+
+func testGetSecretWithVersion(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-get-with-version-" + randomString()
+
+	// Create a secret
+	info, err := manager.CreateSecret(ctx, name, []byte("v1-value"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	initialVersion := info.Version
+
+	// Update to create second version
+	_, err = manager.UpdateSecret(ctx, name, []byte("v2-value"))
+	if err != nil {
+		t.Fatal("unexpected error updating secret:", err)
+	}
+
+	// Get using WithVersion option
+	if initialVersion != "" {
+		value, _, err := manager.GetSecret(ctx, name, secret.WithVersion(initialVersion))
+		if err != nil {
+			t.Fatal("unexpected error getting secret with version:", err)
+		}
+
+		if string(value) != "v1-value" {
+			t.Errorf("expected v1-value, got %q", value)
+		}
+	}
+}
+
+func testUpdateSecretWithDescription(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-update-desc-" + randomString()
+
+	// Create a secret
+	_, err := manager.CreateSecret(ctx, name, []byte("value"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	// Update with description
+	_, err = manager.UpdateSecret(ctx, name, []byte("new-value"),
+		secret.UpdateDescription("test description"))
+	if err != nil {
+		t.Fatal("unexpected error updating secret:", err)
+	}
+
+	// Verify secret was updated
+	value, _, err := manager.GetSecret(ctx, name)
+	if err != nil {
+		t.Fatal("unexpected error getting secret:", err)
+	}
+
+	if string(value) != "new-value" {
+		t.Errorf("expected new-value, got %q", value)
+	}
+}
+
+func testCreateSecretWithDescription(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-create-desc-" + randomString()
+
+	// Create with description
+	_, err := manager.CreateSecret(ctx, name, []byte("value"),
+		secret.Description("test secret description"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	// Verify secret exists
+	value, _, err := manager.GetSecret(ctx, name)
+	if err != nil {
+		t.Fatal("unexpected error getting secret:", err)
+	}
+
+	if string(value) != "value" {
+		t.Errorf("expected value, got %q", value)
+	}
+}
+
+func testUpdateNonExistent(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-update-nonexistent-" + randomString()
+
+	_, err := manager.UpdateSecret(ctx, name, []byte("value"))
+	if err == nil {
+		t.Fatal("expected error updating non-existent secret, got nil")
+	}
+
+	if !errors.Is(err, secret.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func testListWithMultipleFilters(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	prefix := "test-multi-filter-"
+	name1 := prefix + "1-" + randomString()
+	name2 := prefix + "2-" + randomString()
+	name3 := "other-" + randomString()
+
+	// Create secrets with different tags
+	_, err := manager.CreateSecret(ctx, name1, []byte("v1"), secret.Tag("env", "prod"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret 1:", err)
+	}
+	defer manager.DeleteSecret(ctx, name1)
+
+	_, err = manager.CreateSecret(ctx, name2, []byte("v2"), secret.Tag("env", "dev"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret 2:", err)
+	}
+	defer manager.DeleteSecret(ctx, name2)
+
+	_, err = manager.CreateSecret(ctx, name3, []byte("v3"), secret.Tag("env", "prod"))
+	if err != nil {
+		t.Fatal("unexpected error creating secret 3:", err)
+	}
+	defer manager.DeleteSecret(ctx, name3)
+
+	// List with prefix AND tag filter
+	var secrets []secret.Secret
+	for s, err := range manager.ListSecrets(ctx,
+		secret.NamePrefix(prefix),
+		secret.FilterByTag("env", "prod"),
+		secret.MaxResults(10)) {
+		if err != nil {
+			t.Fatal("unexpected error listing secrets:", err)
+		}
+		secrets = append(secrets, s)
+	}
+
+	// Should find name1 (has prefix and prod tag)
+	// Should NOT find name2 (has prefix but dev tag)
+	// Should NOT find name3 (has prod tag but wrong prefix)
+	foundName1 := false
+	for _, s := range secrets {
+		if s.Name == name1 {
+			foundName1 = true
+		}
+		if s.Name == name2 {
+			t.Errorf("found secret %q which has wrong tag", name2)
+		}
+		if s.Name == name3 {
+			t.Errorf("found secret %q which has wrong prefix", name3)
+		}
+	}
+
+	if !foundName1 {
+		t.Error("did not find secret with matching prefix and tag")
+	}
+}
 
 func randomString() string {
 	return time.Now().Format("20060102-150405.000000")
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

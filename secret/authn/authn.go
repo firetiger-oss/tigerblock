@@ -3,9 +3,11 @@ package authn
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 
 	"github.com/firetiger-oss/storage/secret"
 )
@@ -60,7 +62,7 @@ func NewHandler(auth Authenticator, next http.Handler) http.Handler {
 // Credentials is a constraint interface for types that can validate a password.
 // Implementations should store the password hash and perform secure comparison.
 type Credentials interface {
-	Validate(password string) bool
+	Validate(username, password string) bool
 }
 
 // NewBasicAuthenticator returns an Authenticator that uses HTTP Basic Authentication.
@@ -82,15 +84,33 @@ func NewBasicAuthenticator[C Credentials](store secret.Store) Authenticator {
 			return nil, err
 		}
 
-		var creds C
-		if err := json.Unmarshal(value, &creds); err != nil {
+		var credentials C
+		switch c := any(&credentials).(type) {
+		case encoding.TextUnmarshaler:
+			err = c.UnmarshalText(value)
+		case encoding.BinaryUnmarshaler:
+			err = c.UnmarshalBinary(value)
+		default:
+			switch v := reflect.ValueOf(c).Elem(); v.Kind() {
+			case reflect.String:
+				v.SetString(string(value))
+			case reflect.Slice:
+				if v.Type().Elem().Kind() == reflect.Uint8 {
+					v.SetBytes(value)
+					err = nil
+					break
+				}
+				fallthrough
+			default:
+				err = json.Unmarshal(value, c)
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
-
-		if !creds.Validate(password) {
+		if !credentials.Validate(username, password) {
 			return nil, ErrUnauthorized
 		}
-
-		return ContextWithCredentials(ctx, creds), nil
+		return ContextWithCredentials(ctx, credentials), nil
 	})
 }

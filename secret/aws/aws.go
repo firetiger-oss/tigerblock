@@ -13,33 +13,51 @@ import (
 	"github.com/firetiger-oss/storage/secret"
 )
 
-// Manager implements secret.Manager for AWS Secrets Manager
-type Manager struct {
-	client *secretsmanager.Client
-	region string
+// Client defines the subset of secretsmanager.Client methods used by Manager.
+// This allows for mocking in tests.
+type Client interface {
+	CreateSecret(ctx context.Context, params *secretsmanager.CreateSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error)
+	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+	DescribeSecret(ctx context.Context, params *secretsmanager.DescribeSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.DescribeSecretOutput, error)
+	PutSecretValue(ctx context.Context, params *secretsmanager.PutSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.PutSecretValueOutput, error)
+	UpdateSecret(ctx context.Context, params *secretsmanager.UpdateSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.UpdateSecretOutput, error)
+	DeleteSecret(ctx context.Context, params *secretsmanager.DeleteSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.DeleteSecretOutput, error)
+	ListSecrets(ctx context.Context, params *secretsmanager.ListSecretsInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error)
+	ListSecretVersionIds(ctx context.Context, params *secretsmanager.ListSecretVersionIdsInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretVersionIdsOutput, error)
 }
 
-// NewManager creates a new AWS Secrets Manager manager
-func NewManager(ctx context.Context, region string) (*Manager, error) {
-	if region == "" {
-		return nil, fmt.Errorf("AWS region is required")
-	}
+// Verify *secretsmanager.Client implements Client
+var _ Client = (*secretsmanager.Client)(nil)
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+// Manager implements secret.Manager for AWS Secrets Manager
+type Manager struct {
+	client Client
+}
+
+// NewManager creates a Manager using the default AWS config.
+// Panics on configuration error.
+func NewManager() *Manager {
+	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
+		panic("aws: failed to load config: " + err.Error())
 	}
+	return NewManagerFromConfig(cfg)
+}
 
-	return &Manager{
-		client: secretsmanager.NewFromConfig(cfg),
-		region: region,
-	}, nil
+// NewManagerFromConfig creates a Manager from an AWS config.
+func NewManagerFromConfig(cfg aws.Config) *Manager {
+	return NewManagerFromClient(secretsmanager.NewFromConfig(cfg))
+}
+
+// NewManagerFromClient creates a Manager from a Client implementation.
+// This is useful for testing with mock clients.
+func NewManagerFromClient(client Client) *Manager {
+	return &Manager{client: client}
 }
 
 func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Value, options ...secret.CreateOption) (secret.Info, error) {
 	opts := secret.NewCreateOptions(options...)
 
-	// Build tags
 	var awsTags []types.Tag
 	for key, val := range opts.Tags() {
 		awsTags = append(awsTags, types.Tag{
@@ -100,6 +118,17 @@ func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.
 		CreatedAt: aws.ToTime(result.CreatedDate),
 	}
 
+	// Fetch tags via DescribeSecret (GetSecretValue doesn't return tags)
+	descResult, err := m.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+		SecretId: aws.String(name),
+	})
+	if err == nil && descResult.Tags != nil {
+		info.Tags = make(map[string]string, len(descResult.Tags))
+		for _, tag := range descResult.Tags {
+			info.Tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+		}
+	}
+
 	return value, info, nil
 }
 
@@ -147,44 +176,45 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 	opts := secret.NewListOptions(options...)
 
 	return func(yield func(secret.Secret, error) bool) {
-		input := &secretsmanager.ListSecretsInput{}
+		var nextToken *string
+		for {
+			input := &secretsmanager.ListSecretsInput{
+				NextToken: nextToken,
+			}
 
-		if maxResults := opts.MaxResults(); maxResults > 0 {
-			input.MaxResults = aws.Int32(int32(maxResults))
-		}
+			if maxResults := opts.MaxResults(); maxResults > 0 {
+				input.MaxResults = aws.Int32(int32(maxResults))
+			}
 
-		// Build filters for tags
-		if len(opts.Tags()) > 0 {
-			for key, value := range opts.Tags() {
+			// Build filters for tags
+			if len(opts.Tags()) > 0 {
+				for key, value := range opts.Tags() {
+					input.Filters = append(input.Filters, types.Filter{
+						Key:    types.FilterNameStringTypeTagKey,
+						Values: []string{key},
+					})
+					input.Filters = append(input.Filters, types.Filter{
+						Key:    types.FilterNameStringTypeTagValue,
+						Values: []string{value},
+					})
+				}
+			}
+
+			// Add name prefix filter if specified
+			if prefix := opts.NamePrefix(); prefix != "" {
 				input.Filters = append(input.Filters, types.Filter{
-					Key:    types.FilterNameStringTypeTagKey,
-					Values: []string{key},
-				})
-				input.Filters = append(input.Filters, types.Filter{
-					Key:    types.FilterNameStringTypeTagValue,
-					Values: []string{value},
+					Key:    types.FilterNameStringTypeName,
+					Values: []string{prefix},
 				})
 			}
-		}
 
-		// Add name prefix filter if specified
-		if prefix := opts.NamePrefix(); prefix != "" {
-			input.Filters = append(input.Filters, types.Filter{
-				Key:    types.FilterNameStringTypeName,
-				Values: []string{prefix},
-			})
-		}
-
-		paginator := secretsmanager.NewListSecretsPaginator(m.client, input)
-
-		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(ctx)
+			output, err := m.client.ListSecrets(ctx, input)
 			if err != nil {
 				yield(secret.Secret{}, convertError(err))
 				return
 			}
 
-			for _, s := range page.SecretList {
+			for _, s := range output.SecretList {
 				// Convert AWS tags to map
 				tags := make(map[string]string)
 				for _, tag := range s.Tags {
@@ -202,6 +232,11 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 					return
 				}
 			}
+
+			if output.NextToken == nil {
+				break
+			}
+			nextToken = output.NextToken
 		}
 	}
 }
@@ -210,24 +245,24 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 	opts := secret.NewListVersionOptions(options...)
 
 	return func(yield func(secret.Version, error) bool) {
-		input := &secretsmanager.ListSecretVersionIdsInput{
-			SecretId: aws.String(name),
-		}
+		var nextToken *string
+		for {
+			input := &secretsmanager.ListSecretVersionIdsInput{
+				SecretId:  aws.String(name),
+				NextToken: nextToken,
+			}
 
-		if maxResults := opts.MaxResults(); maxResults > 0 {
-			input.MaxResults = aws.Int32(int32(maxResults))
-		}
+			if maxResults := opts.MaxResults(); maxResults > 0 {
+				input.MaxResults = aws.Int32(int32(maxResults))
+			}
 
-		paginator := secretsmanager.NewListSecretVersionIdsPaginator(m.client, input)
-
-		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(ctx)
+			output, err := m.client.ListSecretVersionIds(ctx, input)
 			if err != nil {
 				yield(secret.Version{}, convertError(err))
 				return
 			}
 
-			for _, versionEntry := range page.Versions {
+			for _, versionEntry := range output.Versions {
 				// Determine state based on version stages
 				state := secret.VersionStateDisabled
 				for _, stage := range versionEntry.VersionStages {
@@ -261,6 +296,11 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 					return
 				}
 			}
+
+			if output.NextToken == nil {
+				break
+			}
+			nextToken = output.NextToken
 		}
 	}
 }
@@ -293,5 +333,6 @@ func (m *Manager) GetSecretVersion(ctx context.Context, name string, version str
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	// AWS doesn't support destroying individual versions
 	// Versions are automatically removed after the secret is deleted
-	return fmt.Errorf("destroying individual versions is not supported by AWS Secrets Manager: %w", secret.ErrVersionNotFound)
+	return fmt.Errorf("destroying individual versions is not supported "+
+		"by AWS Secrets Manager: %w", secret.ErrVersionNotFound)
 }

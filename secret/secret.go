@@ -102,8 +102,9 @@ type Manager interface {
 	DestroySecretVersion(ctx context.Context, name string, version string) error
 }
 
-// Secret represents minimal metadata about a secret, suitable for listing operations.
-// This type contains only the information typically available when enumerating secrets.
+// Secret represents minimal metadata about a secret, suitable for listing
+// operations. This type contains only the information typically available
+// when enumerating secrets.
 type Secret struct {
 	Name      string            `json:"name"`
 	CreatedAt time.Time         `json:"created-at,omitzero"`
