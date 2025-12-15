@@ -186,34 +186,6 @@ func (m *loggedManager) ListSecretVersions(ctx context.Context, name string, opt
 	}
 }
 
-func (m *loggedManager) GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error) {
-	m.logger.InfoContext(ctx, "getting secret version",
-		slog.String("operation", "GetVersion"),
-		slog.String("name", name),
-		slog.String("version", version),
-	)
-
-	value, info, err := m.Manager.GetSecretVersion(ctx, name, version)
-	if err != nil {
-		m.logger.ErrorContext(ctx, "failed to get secret version",
-			slog.String("operation", "GetVersion"),
-			slog.String("name", name),
-			slog.String("version", version),
-			slog.String("error", err.Error()),
-		)
-		return value, info, err
-	}
-
-	// NEVER log the actual value - only metadata
-	m.logger.InfoContext(ctx, "got secret version",
-		slog.String("operation", "GetVersion"),
-		slog.String("name", name),
-		slog.String("version", version),
-		slog.Int("value_size", len(value)),
-	)
-	return value, info, nil
-}
-
 func (m *loggedManager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	m.logger.InfoContext(ctx, "destroying secret version",
 		slog.String("operation", "DestroyVersion"),

@@ -176,7 +176,7 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 	manager := NewManager()
 
 	t.Run("GetVersion", func(t *testing.T) {
-		_, _, err := manager.GetSecretVersion(ctx, "test", "v1")
+		_, _, err := manager.GetSecret(ctx, "test", secret.WithVersion("v1"))
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -190,8 +190,8 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		if !errors.Is(err, secret.ErrVersionNotFound) {
-			t.Errorf("expected ErrVersionNotFound, got %v", err)
+		if !errors.Is(err, secret.ErrReadOnly) {
+			t.Errorf("expected ErrReadOnly, got %v", err)
 		}
 	})
 

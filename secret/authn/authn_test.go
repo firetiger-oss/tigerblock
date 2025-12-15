@@ -62,29 +62,6 @@ func TestContextCredentials(t *testing.T) {
 			t.Errorf("expected role %q, got %q", original.Role, retrieved.Role)
 		}
 	})
-
-	t.Run("different types have separate keys", func(t *testing.T) {
-		type otherCredentials struct {
-			ID string `json:"id"`
-		}
-
-		creds1 := testCredentials{User: "alice"}
-		creds2 := otherCredentials{ID: "123"}
-
-		ctx := ContextWithCredentials(t.Context(), creds1)
-		ctx = ContextWithCredentials(ctx, creds2)
-
-		// Both should be retrievable
-		retrieved1, ok1 := CredentialsFromContext[testCredentials](ctx)
-		retrieved2, ok2 := CredentialsFromContext[otherCredentials](ctx)
-
-		if !ok1 || retrieved1.Username() != "alice" {
-			t.Errorf("expected testCredentials with username 'alice', got %v", retrieved1)
-		}
-		if !ok2 || retrieved2.ID != "123" {
-			t.Errorf("expected otherCredentials with ID '123', got %v", retrieved2)
-		}
-	})
 }
 
 func TestNewHandler(t *testing.T) {
@@ -101,7 +78,7 @@ func TestNewHandler(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		handler := NewHandler(auth, next)
+		handler := NewHandler(next, auth)
 
 		req := httptest.NewRequest("GET", "/", nil)
 		rec := httptest.NewRecorder()
@@ -128,7 +105,7 @@ func TestNewHandler(t *testing.T) {
 			nextCalled = true
 		})
 
-		handler := NewHandler(auth, next)
+		handler := NewHandler(next, auth)
 
 		req := httptest.NewRequest("GET", "/", nil)
 		rec := httptest.NewRecorder()
@@ -225,8 +202,8 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
 
 		_, err := auth.Authenticate(req.Context(), req)
-		if err != ErrUnauthorized {
-			t.Errorf("expected ErrUnauthorized, got %v", err)
+		if err != ErrNotFound {
+			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 

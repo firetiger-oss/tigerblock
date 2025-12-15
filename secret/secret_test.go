@@ -45,10 +45,6 @@ func (m *mockManager) ListSecretVersions(ctx context.Context, name string, optio
 	return func(yield func(Version, error) bool) {}
 }
 
-func (m *mockManager) GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error) {
-	return nil, Info{}, ErrVersionNotFound
-}
-
 func (m *mockManager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	return ErrVersionNotFound
 }
@@ -99,10 +95,6 @@ func (m *mockManagerWithList) ListSecrets(ctx context.Context, options ...ListOp
 
 func (m *mockManagerWithList) ListSecretVersions(ctx context.Context, name string, options ...ListVersionOption) iter.Seq2[Version, error] {
 	return func(yield func(Version, error) bool) {}
-}
-
-func (m *mockManagerWithList) GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error) {
-	return nil, Info{}, ErrVersionNotFound
 }
 
 func (m *mockManagerWithList) DestroySecretVersion(ctx context.Context, name string, version string) error {

@@ -89,8 +89,8 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 			function: skipIfReadOnly(testListSecretVersions),
 		},
 		{
-			scenario: "getting a specific secret version",
-			function: skipIfReadOnly(testGetSecretVersion),
+			scenario: "getting secret with version option",
+			function: skipIfReadOnly(testGetSecretWithVersion),
 		},
 		{
 			scenario: "getting non-existent version returns error",
@@ -99,10 +99,6 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 		{
 			scenario: "destroying a secret version",
 			function: skipIfReadOnlyOrNoDestroy(testDestroySecretVersion),
-		},
-		{
-			scenario: "getting secret with version option",
-			function: skipIfReadOnly(testGetSecretWithVersion),
 		},
 		{
 			scenario: "updating secret with description",
@@ -502,42 +498,10 @@ func testListSecretVersions(t *testing.T, manager secret.Manager) {
 	}
 }
 
-func testGetSecretVersion(t *testing.T, manager secret.Manager) {
-	ctx := t.Context()
-	name := "test-get-version-" + randomString()
-
-	// Create a secret with initial value
-	info, err := manager.CreateSecret(ctx, name, []byte("initial-value"))
-	if err != nil {
-		t.Fatal("unexpected error creating secret:", err)
-	}
-	defer manager.DeleteSecret(ctx, name)
-
-	initialVersion := info.Version
-
-	// Update to create a second version
-	_, err = manager.UpdateSecret(ctx, name, []byte("updated-value"))
-	if err != nil {
-		t.Fatal("unexpected error updating secret:", err)
-	}
-
-	// Get the initial version specifically
-	if initialVersion != "" {
-		value, _, err := manager.GetSecretVersion(ctx, name, initialVersion)
-		if err != nil {
-			t.Fatal("unexpected error getting version:", err)
-		}
-
-		if string(value) != "initial-value" {
-			t.Errorf("expected initial value, got %q", value)
-		}
-	}
-}
-
 func testGetSecretVersionNotFound(t *testing.T, manager secret.Manager) {
 	ctx := t.Context()
 
-	_, _, err := manager.GetSecretVersion(ctx, "nonexistent-"+randomString(), "999")
+	_, _, err := manager.GetSecret(ctx, "nonexistent-"+randomString(), secret.WithVersion("999"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -575,7 +539,7 @@ func testDestroySecretVersion(t *testing.T, manager secret.Manager) {
 		}
 
 		// Verify the version is destroyed
-		_, _, err = manager.GetSecretVersion(ctx, name, firstVersion)
+		_, _, err = manager.GetSecret(ctx, name, secret.WithVersion(firstVersion))
 		if err == nil {
 			t.Error("expected error getting destroyed version, got nil")
 		}

@@ -156,6 +156,40 @@ func LoadManagerAt(ctx context.Context, registry Registry, identifier string) (M
 	return registry.LoadManager(ctx, identifier)
 }
 
+// Load parses a secret identifier and returns a Store and the secret name.
+// This is useful for operations that need to work with a secret by name,
+// like URL signing where the secret name is embedded in the signed URL.
+//
+// Example:
+//
+//	store, secretName, err := secret.Load(ctx, "arn:aws:secretsmanager:us-east-1:123456789012:secret:mykey")
+//	if err != nil {
+//		return err
+//	}
+//	signer := secret.NewHMAC256(store, secretName)
+func Load(ctx context.Context, secretID string) (Store, string, error) {
+	return LoadAt(ctx, DefaultRegistry(), secretID)
+}
+
+// LoadAt is like Load but uses the specified registry.
+func LoadAt(ctx context.Context, registry Registry, secretID string) (Store, string, error) {
+	managerID, name, err := registry.ParseSecret(secretID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if name == "" {
+		return nil, "", fmt.Errorf("secret name required in identifier: %s", secretID)
+	}
+
+	manager, err := registry.LoadManager(ctx, managerID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return manager, name, nil
+}
+
 // Create is a convenience function that creates a secret using an identifier.
 //
 // Example:

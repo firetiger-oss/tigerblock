@@ -19,6 +19,7 @@ import (
 
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/internal/sequtil"
+	"github.com/firetiger-oss/storage/secret"
 	"github.com/firetiger-oss/storage/uri"
 )
 
@@ -65,11 +66,16 @@ func WithListType(listType string) BucketOption {
 	return func(b *Bucket) { b.listType = listType }
 }
 
+func WithSigner(signer secret.Signer) BucketOption {
+	return func(b *Bucket) { b.signer = signer }
+}
+
 type Bucket struct {
 	client   *http.Client
 	listType string
 	host     string
 	header   http.Header
+	signer   secret.Signer
 }
 
 func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -552,14 +558,28 @@ func (b *Bucket) PresignGetObject(ctx context.Context, key string, expiration ti
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	if b.signer == nil {
+		return "", storage.ErrPresignNotSupported
+	}
+	u, err := url.Parse(b.host + "/" + key)
+	if err != nil {
+		return "", err
+	}
+	return b.signer.Sign(ctx, http.MethodGet, u, time.Now().Add(expiration))
 }
 
 func (b *Bucket) PresignPutObject(ctx context.Context, key string, expiration time.Duration, options ...storage.PutOption) (string, error) {
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	if b.signer == nil {
+		return "", storage.ErrPresignNotSupported
+	}
+	u, err := url.Parse(b.host + "/" + key)
+	if err != nil {
+		return "", err
+	}
+	return b.signer.Sign(ctx, http.MethodPut, u, time.Now().Add(expiration))
 }
 
 func (b *Bucket) PresignHeadObject(ctx context.Context, key string) (string, error) {

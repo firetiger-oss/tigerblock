@@ -36,9 +36,15 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 
 // Get retrieves an environment variable as a secret.
 // Returns ErrNotFound if the environment variable is not set.
+// Returns ErrVersionNotFound if a version is requested since env vars don't support versioning.
 func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, secret.Info{}, err
+	}
+
+	opts := secret.NewGetOptions(options...)
+	if opts.Version() != "" {
+		return nil, secret.Info{}, secret.ErrVersionNotFound
 	}
 
 	value, ok := os.LookupEnv(name)
@@ -48,7 +54,6 @@ func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.
 
 	return secret.Value(value), secret.Info{
 		Name: name,
-		// No version, tags, timestamps, or description available for env vars
 	}, nil
 }
 
@@ -110,14 +115,7 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 	}
 }
 
-// GetVersion returns ErrVersionNotFound since the env backend doesn't support
-// versioning.
-func (m *Manager) GetSecretVersion(ctx context.Context, name string, version string) (secret.Value, secret.Info, error) {
-	return nil, secret.Info{}, secret.ErrVersionNotFound
-}
-
-// DestroyVersion returns ErrVersionNotFound since the env backend doesn't
-// support versioning.
+// DestroySecretVersion returns ErrReadOnly since the env backend is read-only.
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
-	return secret.ErrVersionNotFound
+	return secret.ErrReadOnly
 }

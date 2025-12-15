@@ -305,31 +305,6 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 	}
 }
 
-func (m *Manager) GetSecretVersion(ctx context.Context, name string, version string) (secret.Value, secret.Info, error) {
-	result, err := m.client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
-		SecretId:  aws.String(name),
-		VersionId: aws.String(version),
-	})
-	if err != nil {
-		return nil, secret.Info{}, convertError(err)
-	}
-
-	var value secret.Value
-	if result.SecretBinary != nil {
-		value = result.SecretBinary
-	} else if result.SecretString != nil {
-		value = secret.Value(*result.SecretString)
-	}
-
-	info := secret.Info{
-		Name:      name,
-		Version:   version,
-		CreatedAt: aws.ToTime(result.CreatedDate),
-	}
-
-	return value, info, nil
-}
-
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	// AWS doesn't support destroying individual versions
 	// Versions are automatically removed after the secret is deleted

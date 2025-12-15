@@ -166,26 +166,6 @@ func (m *instrumentedManager) ListSecretVersions(ctx context.Context, name strin
 	}
 }
 
-func (m *instrumentedManager) GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error) {
-	ctx, span := m.tracer.Start(ctx, "secret.GetVersion",
-		trace.WithAttributes(
-			attribute.String("secret.name", name),
-			attribute.String("secret.version", version),
-		),
-	)
-	defer span.End()
-
-	value, info, err := m.Manager.GetSecretVersion(ctx, name, version)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return value, info, err
-	}
-
-	span.SetAttributes(attribute.Int("secret.value_size", len(value)))
-	return value, info, nil
-}
-
 func (m *instrumentedManager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	ctx, span := m.tracer.Start(ctx, "secret.DestroyVersion",
 		trace.WithAttributes(

@@ -16,6 +16,10 @@ import (
 // ErrUnauthorized is returned when authentication fails.
 var ErrUnauthorized = errors.New("unauthorized")
 
+// ErrNotFound indicates no credentials were found in the request.
+// When returned by an authenticator, NewHandler tries the next authenticator.
+var ErrNotFound = errors.New("credentials not found")
+
 // Authenticator provides an interface for HTTP request authentication.
 // Authenticate returns a context with credentials injected (via ContextWithCredentials).
 // This design allows composing multiple authentication schemes.
@@ -32,31 +36,43 @@ func (f AuthenticatorFunc) Authenticate(ctx context.Context, req *http.Request) 
 }
 
 // credentialsContextKey is a generic context key type for credentials.
-type credentialsContextKey[Credentials any] struct{}
+type credentialsContextKey struct{}
 
 // CredentialsFromContext retrieves credentials from the context.
 // Returns the credentials and true if present, zero value and false otherwise.
+//
+// To load any credentials from the context and perform type assertion later,
+// use ContextWithCredentials[any].
 func CredentialsFromContext[Credentials any](ctx context.Context) (Credentials, bool) {
-	creds, ok := ctx.Value(credentialsContextKey[Credentials]{}).(Credentials)
+	creds, ok := ctx.Value(credentialsContextKey{}).(Credentials)
 	return creds, ok
 }
 
 // ContextWithCredentials returns a new context with credentials.
 func ContextWithCredentials[Credentials any](ctx context.Context, creds Credentials) context.Context {
-	return context.WithValue(ctx, credentialsContextKey[Credentials]{}, creds)
+	return context.WithValue(ctx, credentialsContextKey{}, creds)
 }
 
 // NewHandler creates an HTTP handler that authenticates requests.
-// On success, calls next handler with the context returned by auth.Authenticate.
-// On failure, responds with 401 Unauthorized.
-func NewHandler(auth Authenticator, next http.Handler) http.Handler {
+// It tries each authenticator in order until one succeeds.
+// If an authenticator returns ErrNotFound, it tries the next one.
+// On success, calls next handler with the context returned by Authenticate.
+// On failure (all authenticators fail), responds with 401 Unauthorized.
+func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, err := auth.Authenticate(r.Context(), r)
-		if err != nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		ctx := r.Context()
+		var err error
+		for _, auth := range authenticators {
+			ctx, err = auth.Authenticate(ctx, r)
+			if err == nil {
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if !errors.Is(err, ErrNotFound) {
+				break
+			}
 		}
-		next.ServeHTTP(w, r.WithContext(ctx))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	})
 }
 
@@ -74,7 +90,7 @@ func NewBasicAuthenticator[C BasicAuthCredentials](store secret.Store) Authentic
 	return AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
 		username, password, ok := req.BasicAuth()
 		if !ok {
-			return nil, ErrUnauthorized
+			return nil, ErrNotFound
 		}
 
 		value, _, err := store.GetSecret(ctx, username)

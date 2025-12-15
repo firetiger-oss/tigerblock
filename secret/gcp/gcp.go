@@ -365,25 +365,6 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 	}
 }
 
-func (m *Manager) GetSecretVersion(ctx context.Context, name string, version string) (secret.Value, secret.Info, error) {
-	versionPath := m.projectPath + "/secrets/" + name + "/versions/" + version
-
-	result, err := m.client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{
-		Name: versionPath,
-	})
-	if err != nil {
-		return nil, secret.Info{}, convertError(err)
-	}
-
-	info := secret.Info{
-		Name:    name,
-		Version: version,
-		// GCP AccessSecretVersionResponse doesn't include creation time
-	}
-
-	return result.Payload.Data, info, nil
-}
-
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	versionPath := m.projectPath + "/secrets/" + name + "/versions/" + version
 

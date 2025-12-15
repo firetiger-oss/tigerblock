@@ -50,7 +50,3 @@ func (m *readonlyManager) ListSecrets(ctx context.Context, options ...ListOption
 func (m *readonlyManager) ListSecretVersions(ctx context.Context, name string, options ...ListVersionOption) iter.Seq2[Version, error] {
 	return m.Manager.ListSecretVersions(ctx, name, options...)
 }
-
-func (m *readonlyManager) GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error) {
-	return m.Manager.GetSecretVersion(ctx, name, version)
-}

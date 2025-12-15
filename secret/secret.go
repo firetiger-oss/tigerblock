@@ -91,11 +91,6 @@ type Manager interface {
 	// only the current version or an empty iterator.
 	ListSecretVersions(ctx context.Context, name string, options ...ListVersionOption) iter.Seq2[Version, error]
 
-	// GetSecretVersion retrieves a specific version of a secret.
-	// Returns ErrVersionNotFound if the version does not exist.
-	// Returns ErrNotFound if the secret does not exist.
-	GetSecretVersion(ctx context.Context, name string, version string) (Value, Info, error)
-
 	// DestroySecretVersion permanently destroys a specific version of a secret.
 	// This operation is irreversible.
 	// Returns ErrVersionNotFound if the version does not exist.
