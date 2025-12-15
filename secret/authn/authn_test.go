@@ -2,22 +2,23 @@ package authn
 
 import (
 	"context"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/firetiger-oss/storage/secret"
 )
 
-type testCredentials struct {
+type simpleCredentials struct {
+	User string
+	Role string
+}
+
+type jsonCredentials struct {
 	User string `json:"username"`
 	Pass string `json:"password"`
 	Role string `json:"role"`
 }
 
-func (c testCredentials) Username() string { return c.User }
-func (c testCredentials) Password() string { return c.Pass }
+type customString string
 
 func TestAuthenticatorFunc(t *testing.T) {
 	ctx := t.Context()
@@ -41,22 +42,22 @@ func TestAuthenticatorFunc(t *testing.T) {
 func TestContextCredentials(t *testing.T) {
 	t.Run("returns false when not present", func(t *testing.T) {
 		ctx := t.Context()
-		_, ok := CredentialsFromContext[testCredentials](ctx)
+		_, ok := CredentialsFromContext[simpleCredentials](ctx)
 		if ok {
 			t.Error("expected ok to be false")
 		}
 	})
 
 	t.Run("round-trips credentials", func(t *testing.T) {
-		original := testCredentials{User: "alice", Pass: "secret", Role: "admin"}
+		original := simpleCredentials{User: "alice", Role: "admin"}
 		ctx := ContextWithCredentials(t.Context(), original)
 
-		retrieved, ok := CredentialsFromContext[testCredentials](ctx)
+		retrieved, ok := CredentialsFromContext[simpleCredentials](ctx)
 		if !ok {
 			t.Fatal("expected credentials to be present")
 		}
-		if retrieved.Username() != original.Username() {
-			t.Errorf("expected username %q, got %q", original.Username(), retrieved.Username())
+		if retrieved.User != original.User {
+			t.Errorf("expected user %q, got %q", original.User, retrieved.User)
 		}
 		if retrieved.Role != original.Role {
 			t.Errorf("expected role %q, got %q", original.Role, retrieved.Role)
@@ -66,15 +67,15 @@ func TestContextCredentials(t *testing.T) {
 
 func TestNewHandler(t *testing.T) {
 	t.Run("success passes context to next handler", func(t *testing.T) {
-		creds := testCredentials{User: "alice", Role: "admin"}
+		creds := simpleCredentials{User: "alice", Role: "admin"}
 		auth := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
 			return ContextWithCredentials(ctx, creds), nil
 		})
 
-		var receivedCreds testCredentials
+		var receivedCreds simpleCredentials
 		var credsFound bool
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedCreds, credsFound = CredentialsFromContext[testCredentials](r.Context())
+			receivedCreds, credsFound = CredentialsFromContext[simpleCredentials](r.Context())
 			w.WriteHeader(http.StatusOK)
 		})
 
@@ -90,8 +91,8 @@ func TestNewHandler(t *testing.T) {
 		if !credsFound {
 			t.Fatal("expected credentials in context")
 		}
-		if receivedCreds.Username() != "alice" {
-			t.Errorf("expected username 'alice', got %q", receivedCreds.Username())
+		if receivedCreds.User != "alice" {
+			t.Errorf("expected user 'alice', got %q", receivedCreds.User)
 		}
 	})
 
@@ -118,198 +119,108 @@ func TestNewHandler(t *testing.T) {
 			t.Error("expected next handler not to be called")
 		}
 	})
-}
 
-func TestNewBasicAuthenticator(t *testing.T) {
-	credsJSON := []byte(`{"username":"alice","password":"secret123","role":"admin"}`)
+	t.Run("tries next authenticator on ErrNotFound", func(t *testing.T) {
+		creds := simpleCredentials{User: "bob", Role: "user"}
 
-	makeStore := func(secrets map[string]secret.Value) secret.Store {
-		return secret.StoreFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
-			value, ok := secrets[name]
-			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
-			}
-			return value, secret.Info{Name: name}, nil
+		auth1 := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
+			return nil, ErrNotFound
 		})
-	}
-
-	basicAuth := func(username, password string) string {
-		return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
-	}
-
-	t.Run("valid credentials", func(t *testing.T) {
-		store := makeStore(map[string]secret.Value{
-			"alice": credsJSON,
+		auth2 := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
+			return ContextWithCredentials(ctx, creds), nil
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+
+		var receivedCreds simpleCredentials
+		var credsFound bool
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedCreds, credsFound = CredentialsFromContext[simpleCredentials](r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+
+		handler := NewHandler(next, auth1, auth2)
 
 		req := httptest.NewRequest("GET", "/", nil)
-		req.Header.Set("Authorization", basicAuth("alice", "secret123"))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
 
-		ctx, err := auth.Authenticate(req.Context(), req)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rec.Code)
 		}
-
-		creds, ok := CredentialsFromContext[testCredentials](ctx)
-		if !ok {
+		if !credsFound {
 			t.Fatal("expected credentials in context")
 		}
-		if creds.Username() != "alice" {
-			t.Errorf("expected username 'alice', got %q", creds.Username())
-		}
-		if creds.Role != "admin" {
-			t.Errorf("expected role 'admin', got %q", creds.Role)
-		}
-	})
-
-	t.Run("invalid password", func(t *testing.T) {
-		store := makeStore(map[string]secret.Value{
-			"alice": credsJSON,
-		})
-		auth := NewBasicAuthenticator[testCredentials](store)
-
-		req := httptest.NewRequest("GET", "/", nil)
-		req.Header.Set("Authorization", basicAuth("alice", "wrongpassword"))
-
-		_, err := auth.Authenticate(req.Context(), req)
-		if err != ErrUnauthorized {
-			t.Errorf("expected ErrUnauthorized, got %v", err)
-		}
-	})
-
-	t.Run("unknown user", func(t *testing.T) {
-		store := makeStore(map[string]secret.Value{
-			"alice": credsJSON,
-		})
-		auth := NewBasicAuthenticator[testCredentials](store)
-
-		req := httptest.NewRequest("GET", "/", nil)
-		req.Header.Set("Authorization", basicAuth("bob", "secret123"))
-
-		_, err := auth.Authenticate(req.Context(), req)
-		if err != ErrUnauthorized {
-			t.Errorf("expected ErrUnauthorized, got %v", err)
-		}
-	})
-
-	t.Run("missing auth header", func(t *testing.T) {
-		store := makeStore(map[string]secret.Value{
-			"alice": credsJSON,
-		})
-		auth := NewBasicAuthenticator[testCredentials](store)
-
-		req := httptest.NewRequest("GET", "/", nil)
-
-		_, err := auth.Authenticate(req.Context(), req)
-		if err != ErrNotFound {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("invalid JSON in secret", func(t *testing.T) {
-		store := makeStore(map[string]secret.Value{
-			"alice": secret.Value("not json"),
-		})
-		auth := NewBasicAuthenticator[testCredentials](store)
-
-		req := httptest.NewRequest("GET", "/", nil)
-		req.Header.Set("Authorization", basicAuth("alice", "secret123"))
-
-		_, err := auth.Authenticate(req.Context(), req)
-		if err == nil {
-			t.Error("expected error for invalid JSON")
-		}
-		// Should not be ErrUnauthorized - it's a server error
-		if err == ErrUnauthorized {
-			t.Error("expected non-auth error for invalid JSON")
+		if receivedCreds.User != "bob" {
+			t.Errorf("expected user 'bob', got %q", receivedCreds.User)
 		}
 	})
 }
 
-func TestNewBasicAuthForwarder(t *testing.T) {
-	t.Run("injects credentials when present", func(t *testing.T) {
-		var capturedReq *http.Request
-		transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			capturedReq = req
-			return &http.Response{StatusCode: http.StatusOK}, nil
-		})
+func TestMarshalUnmarshal(t *testing.T) {
+	t.Run("JSON struct round trip", func(t *testing.T) {
+		original := jsonCredentials{User: "alice", Pass: "secret123", Role: "admin"}
 
-		forwarder := NewBasicAuthForwarder[testCredentials](transport)
-
-		creds := testCredentials{User: "alice", Pass: "secret123"}
-		ctx := ContextWithCredentials(t.Context(), creds)
-
-		req := httptest.NewRequest("GET", "http://example.com/api", nil)
-		req = req.WithContext(ctx)
-
-		_, err := forwarder.RoundTrip(req)
+		value, err := Marshal(original)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("Marshal error: %v", err)
 		}
 
-		if capturedReq == nil {
-			t.Fatal("expected request to be captured")
+		unmarshaled, err := Unmarshal[jsonCredentials](value)
+		if err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
 		}
 
-		username, password, ok := capturedReq.BasicAuth()
-		if !ok {
-			t.Fatal("expected Basic Auth header to be set")
+		if unmarshaled.User != original.User {
+			t.Errorf("expected user %q, got %q", original.User, unmarshaled.User)
 		}
-		if username != "alice" {
-			t.Errorf("expected username 'alice', got %q", username)
+		if unmarshaled.Pass != original.Pass {
+			t.Errorf("expected pass %q, got %q", original.Pass, unmarshaled.Pass)
 		}
-		if password != "secret123" {
-			t.Errorf("expected password 'secret123', got %q", password)
+		if unmarshaled.Role != original.Role {
+			t.Errorf("expected role %q, got %q", original.Role, unmarshaled.Role)
 		}
 	})
 
-	t.Run("passes through without credentials", func(t *testing.T) {
-		var capturedReq *http.Request
-		transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			capturedReq = req
-			return &http.Response{StatusCode: http.StatusOK}, nil
-		})
+	t.Run("string type round trip", func(t *testing.T) {
+		original := customString("alice:secret123")
 
-		forwarder := NewBasicAuthForwarder[testCredentials](transport)
-
-		req := httptest.NewRequest("GET", "http://example.com/api", nil)
-
-		_, err := forwarder.RoundTrip(req)
+		value, err := Marshal(original)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("Marshal error: %v", err)
 		}
 
-		if capturedReq == nil {
-			t.Fatal("expected request to be captured")
+		if string(value) != "alice:secret123" {
+			t.Errorf("expected value 'alice:secret123', got %q", value)
 		}
 
-		if capturedReq.Header.Get("Authorization") != "" {
-			t.Error("expected no Authorization header when no credentials in context")
+		unmarshaled, err := Unmarshal[customString](value)
+		if err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+
+		if string(unmarshaled) != "alice:secret123" {
+			t.Errorf("expected 'alice:secret123', got %q", unmarshaled)
 		}
 	})
 
-	t.Run("does not modify original request", func(t *testing.T) {
-		transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: http.StatusOK}, nil
-		})
+	t.Run("byte slice round trip", func(t *testing.T) {
+		original := []byte("raw credentials data")
 
-		forwarder := NewBasicAuthForwarder[testCredentials](transport)
-
-		creds := testCredentials{User: "alice", Pass: "secret123"}
-		ctx := ContextWithCredentials(t.Context(), creds)
-
-		req := httptest.NewRequest("GET", "http://example.com/api", nil)
-		req = req.WithContext(ctx)
-
-		_, err := forwarder.RoundTrip(req)
+		value, err := Marshal(original)
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("Marshal error: %v", err)
 		}
 
-		// Original request should not have Authorization header
-		if req.Header.Get("Authorization") != "" {
-			t.Error("original request should not be modified")
+		if string(value) != "raw credentials data" {
+			t.Errorf("expected value 'raw credentials data', got %q", value)
+		}
+
+		unmarshaled, err := Unmarshal[[]byte](value)
+		if err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+
+		if string(unmarshaled) != "raw credentials data" {
+			t.Errorf("expected 'raw credentials data', got %q", unmarshaled)
 		}
 	})
 }

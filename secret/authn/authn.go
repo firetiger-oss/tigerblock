@@ -3,7 +3,6 @@ package authn
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding"
 	"encoding/json"
 	"errors"
@@ -61,11 +60,10 @@ func ContextWithCredentials[Credentials any](ctx context.Context, creds Credenti
 func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		var err error
 		for _, auth := range authenticators {
-			ctx, err = auth.Authenticate(ctx, r)
+			newCtx, err := auth.Authenticate(ctx, r)
 			if err == nil {
-				next.ServeHTTP(w, r.WithContext(ctx))
+				next.ServeHTTP(w, r.WithContext(newCtx))
 				return
 			}
 			if !errors.Is(err, ErrNotFound) {
@@ -76,77 +74,59 @@ func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler
 	})
 }
 
-// BasicAuthCredentials provides username and password for HTTP Basic Auth.
-type BasicAuthCredentials interface {
-	Username() string
-	Password() string
-}
-
-// NewBasicAuthenticator returns an Authenticator that uses HTTP Basic Authentication.
-// C must implement BasicAuthCredentials and be JSON-deserializable.
-// Uses the username from Basic Auth as the secret name.
-// Injects credentials into context via ContextWithCredentials[C].
-func NewBasicAuthenticator[C BasicAuthCredentials](store secret.Store) Authenticator {
-	return AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-		username, password, ok := req.BasicAuth()
-		if !ok {
-			return nil, ErrNotFound
+// Unmarshal decodes a secret value into credentials.
+// It supports types that implement encoding.TextUnmarshaler, encoding.BinaryUnmarshaler,
+// string-based types, []byte, or JSON-deserializable structs.
+func Unmarshal[Credentials any](value secret.Value) (Credentials, error) {
+	var credentials Credentials
+	switch c := any(&credentials).(type) {
+	case encoding.TextUnmarshaler:
+		if err := c.UnmarshalText(value); err != nil {
+			return credentials, err
 		}
-
-		value, _, err := store.GetSecret(ctx, username)
-		if err != nil {
-			if errors.Is(err, secret.ErrNotFound) {
-				return nil, ErrUnauthorized
-			}
-			return nil, err
+	case encoding.BinaryUnmarshaler:
+		if err := c.UnmarshalBinary(value); err != nil {
+			return credentials, err
 		}
-
-		var credentials C
-		switch c := any(&credentials).(type) {
-		case encoding.TextUnmarshaler:
-			err = c.UnmarshalText(value)
-		case encoding.BinaryUnmarshaler:
-			err = c.UnmarshalBinary(value)
-		default:
-			switch v := reflect.ValueOf(c).Elem(); v.Kind() {
-			case reflect.String:
-				v.SetString(string(value))
-			case reflect.Slice:
-				if v.Type().Elem().Kind() == reflect.Uint8 {
-					v.SetBytes(value)
-					err = nil
-					break
+	default:
+		switch v := reflect.ValueOf(c).Elem(); v.Kind() {
+		case reflect.String:
+			v.SetString(string(value))
+		case reflect.Slice:
+			if v.Type().Elem().Kind() == reflect.Uint8 {
+				v.SetBytes(value)
+			} else {
+				if err := json.Unmarshal(value, c); err != nil {
+					return credentials, err
 				}
-				fallthrough
-			default:
-				err = json.Unmarshal(value, c)
+			}
+		default:
+			if err := json.Unmarshal(value, c); err != nil {
+				return credentials, err
 			}
 		}
-		if err != nil {
-			return nil, err
-		}
-		if subtle.ConstantTimeCompare([]byte(credentials.Password()), []byte(password)) != 1 {
-			return nil, ErrUnauthorized
-		}
-		return ContextWithCredentials(ctx, credentials), nil
-	})
+	}
+	return credentials, nil
 }
 
-// NewBasicAuthForwarder returns an http.RoundTripper that injects Basic Auth
-// credentials from the context into outbound requests. If the context has no
-// credentials, requests pass through unchanged.
-func NewBasicAuthForwarder[Credentials BasicAuthCredentials](t http.RoundTripper) http.RoundTripper {
-	return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if creds, ok := CredentialsFromContext[Credentials](req.Context()); ok {
-			req = req.Clone(req.Context())
-			req.SetBasicAuth(creds.Username(), creds.Password())
+// Marshal encodes credentials into a secret value.
+// It supports types that implement encoding.TextMarshaler, encoding.BinaryMarshaler,
+// string-based types, []byte, or JSON-serializable structs.
+func Marshal[Credentials any](creds Credentials) (secret.Value, error) {
+	switch c := any(creds).(type) {
+	case encoding.TextMarshaler:
+		return c.MarshalText()
+	case encoding.BinaryMarshaler:
+		return c.MarshalBinary()
+	default:
+		switch v := reflect.ValueOf(creds); v.Kind() {
+		case reflect.String:
+			return secret.Value(v.String()), nil
+		case reflect.Slice:
+			if v.Type().Elem().Kind() == reflect.Uint8 {
+				return secret.Value(v.Bytes()), nil
+			}
 		}
-		return t.RoundTrip(req)
-	})
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+		return json.Marshal(creds)
+	}
 }
