@@ -42,19 +42,22 @@ func TestAuthenticatorFunc(t *testing.T) {
 func TestContextCredentials(t *testing.T) {
 	t.Run("returns false when not present", func(t *testing.T) {
 		ctx := t.Context()
-		_, ok := CredentialFromContext[simpleCredential](ctx)
+		_, _, ok := CredentialFromContext[simpleCredential](ctx)
 		if ok {
 			t.Error("expected ok to be false")
 		}
 	})
 
-	t.Run("round-trips credentials", func(t *testing.T) {
+	t.Run("round-trips credentials and domain", func(t *testing.T) {
 		original := simpleCredential{User: "alice", Role: "admin"}
-		ctx := ContextWithCredential(t.Context(), original)
+		ctx := ContextWithCredential(t.Context(), "example.com", original)
 
-		retrieved, ok := CredentialFromContext[simpleCredential](ctx)
+		domain, retrieved, ok := CredentialFromContext[simpleCredential](ctx)
 		if !ok {
 			t.Fatal("expected credentials to be present")
+		}
+		if domain != "example.com" {
+			t.Errorf("expected domain %q, got %q", "example.com", domain)
 		}
 		if retrieved.User != original.User {
 			t.Errorf("expected user %q, got %q", original.User, retrieved.User)
@@ -69,13 +72,13 @@ func TestNewHandler(t *testing.T) {
 	t.Run("success passes context to next handler", func(t *testing.T) {
 		creds := simpleCredential{User: "alice", Role: "admin"}
 		auth := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-			return ContextWithCredential(ctx, creds), nil
+			return ContextWithCredential(ctx, "example.com", creds), nil
 		})
 
 		var receivedCreds simpleCredential
 		var credsFound bool
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
+			_, receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
 			w.WriteHeader(http.StatusOK)
 		})
 
@@ -127,13 +130,13 @@ func TestNewHandler(t *testing.T) {
 			return nil, ErrNotFound
 		})
 		auth2 := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-			return ContextWithCredential(ctx, creds), nil
+			return ContextWithCredential(ctx, "example.com", creds), nil
 		})
 
 		var receivedCreds simpleCredential
 		var credsFound bool
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
+			_, receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
 			w.WriteHeader(http.StatusOK)
 		})
 

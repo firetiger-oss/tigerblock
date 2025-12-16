@@ -63,7 +63,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		creds, ok := CredentialFromContext[testCredential](ctx)
+		_, creds, ok := CredentialFromContext[testCredential](ctx)
 		if !ok {
 			t.Fatal("expected credentials in context")
 		}
@@ -142,8 +142,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 func TestNewBasicAuthForwarder(t *testing.T) {
 	// Helper to create context with credentials and domain
 	contextWithCredsAndDomain := func(creds BasicAuthCredential, domain string) context.Context {
-		ctx := context.WithValue(t.Context(), basicAuthDomain{}, domain)
-		return ContextWithCredential(ctx, creds)
+		return ContextWithCredential(t.Context(), domain, creds)
 	}
 
 	t.Run("injects credentials when domain matches", func(t *testing.T) {
@@ -641,7 +640,7 @@ func TestBasicAuthenticatorStoresDomainInContext(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		domain := domainFromContext(ctx)
+		domain, _, _ := CredentialFromContext[testCredential](ctx)
 		if domain != "example.com" {
 			t.Errorf("expected domain 'example.com', got %q", domain)
 		}
@@ -662,7 +661,7 @@ func TestBasicAuthenticatorStoresDomainInContext(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		domain := domainFromContext(ctx)
+		domain, _, _ := CredentialFromContext[testCredential](ctx)
 		if domain != "example.com" {
 			t.Errorf("expected domain 'example.com', got %q", domain)
 		}

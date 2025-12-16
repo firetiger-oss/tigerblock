@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/firetiger-oss/storage/secret"
+	"golang.org/x/net/publicsuffix"
 )
 
 // SignedURLCredential contains information extracted from a signed URL.
@@ -33,7 +34,8 @@ func NewSignedURLAuthenticator(provider secret.Provider) Authenticator {
 			Path:       req.URL.Path,
 			Expiration: parseExpiration(req.URL.Query().Get("expires")),
 		}
-		return ContextWithCredential(ctx, credential), nil
+		domain, _ := publicsuffix.EffectiveTLDPlusOne(hostname(req))
+		return ContextWithCredential(ctx, domain, credential), nil
 	})
 }
 

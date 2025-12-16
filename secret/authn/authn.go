@@ -59,22 +59,32 @@ func NewLoader[C any](provider secret.Provider) Loader[C] {
 	})
 }
 
-// credentialsContextKey is a generic context key type for credentials.
+// credentialsContextKey is a context key type for credentials.
 type credentialsContextKey struct{}
 
-// CredentialFromContext retrieves a credential from the context.
-// Returns the credential and true if present, zero value and false otherwise.
-//
-// To load any credential from the context and perform type assertion later,
-// use ContextWithCredential[any].
-func CredentialFromContext[Credential any](ctx context.Context) (Credential, bool) {
-	creds, ok := ctx.Value(credentialsContextKey{}).(Credential)
-	return creds, ok
+// credentialEntry stores a credential with its associated domain.
+type credentialEntry struct {
+	domain     string
+	credential any
 }
 
-// ContextWithCredential returns a new context with a credential.
-func ContextWithCredential[Credential any](ctx context.Context, creds Credential) context.Context {
-	return context.WithValue(ctx, credentialsContextKey{}, creds)
+// CredentialFromContext retrieves a credential and its domain from the context.
+// Returns the domain, credential, and true if present.
+func CredentialFromContext[Credential any](ctx context.Context) (domain string, credential Credential, ok bool) {
+	entry, ok := ctx.Value(credentialsContextKey{}).(credentialEntry)
+	if !ok {
+		return "", credential, false
+	}
+	credential, ok = entry.credential.(Credential)
+	if !ok {
+		return "", credential, false
+	}
+	return entry.domain, credential, true
+}
+
+// ContextWithCredential returns a new context with a credential and its domain.
+func ContextWithCredential[Credential any](ctx context.Context, domain string, credential Credential) context.Context {
+	return context.WithValue(ctx, credentialsContextKey{}, credentialEntry{domain: domain, credential: credential})
 }
 
 // NewHandler creates an HTTP handler that authenticates requests.

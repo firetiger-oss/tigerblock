@@ -45,7 +45,7 @@ func TestNewBearerAuthenticator(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		cred, ok := CredentialFromContext[testBearerCredential](ctx)
+		_, cred, ok := CredentialFromContext[testBearerCredential](ctx)
 		if !ok {
 			t.Fatal("expected credential in context")
 		}
@@ -135,8 +135,7 @@ func TestNewBearerAuthenticator(t *testing.T) {
 
 func TestNewBearerAuthForwarder(t *testing.T) {
 	contextWithCredAndDomain := func(cred BearerCredential, domain string) context.Context {
-		ctx := context.WithValue(t.Context(), bearerAuthDomain{}, domain)
-		return ContextWithCredential(ctx, cred)
+		return ContextWithCredential(t.Context(), domain, cred)
 	}
 
 	t.Run("injects token when domain matches", func(t *testing.T) {
@@ -548,7 +547,7 @@ func TestBearerAuthenticatorStoresDomainInContext(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		domain := bearerDomainFromContext(ctx)
+		domain, _, _ := CredentialFromContext[stringBearerCredential](ctx)
 		if domain != "example.com" {
 			t.Errorf("expected domain 'example.com', got %q", domain)
 		}
@@ -569,7 +568,7 @@ func TestBearerAuthenticatorStoresDomainInContext(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		domain := bearerDomainFromContext(ctx)
+		domain, _, _ := CredentialFromContext[stringBearerCredential](ctx)
 		if domain != "example.com" {
 			t.Errorf("expected domain 'example.com', got %q", domain)
 		}

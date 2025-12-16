@@ -62,7 +62,7 @@ func TestSignedURLAuthenticator(t *testing.T) {
 		t.Fatalf("expected success, got error: %v", err)
 	}
 
-	creds, ok := CredentialFromContext[SignedURLCredential](resultCtx)
+	_, creds, ok := CredentialFromContext[SignedURLCredential](resultCtx)
 	if !ok {
 		t.Fatal("expected credentials in context")
 	}
