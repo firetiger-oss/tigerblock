@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-type simpleCredentials struct {
+type simpleCredential struct {
 	User string
 	Role string
 }
 
-type jsonCredentials struct {
+type jsonCredential struct {
 	User string `json:"username"`
 	Pass string `json:"password"`
 	Role string `json:"role"`
@@ -42,17 +42,17 @@ func TestAuthenticatorFunc(t *testing.T) {
 func TestContextCredentials(t *testing.T) {
 	t.Run("returns false when not present", func(t *testing.T) {
 		ctx := t.Context()
-		_, ok := CredentialsFromContext[simpleCredentials](ctx)
+		_, ok := CredentialFromContext[simpleCredential](ctx)
 		if ok {
 			t.Error("expected ok to be false")
 		}
 	})
 
 	t.Run("round-trips credentials", func(t *testing.T) {
-		original := simpleCredentials{User: "alice", Role: "admin"}
-		ctx := ContextWithCredentials(t.Context(), original)
+		original := simpleCredential{User: "alice", Role: "admin"}
+		ctx := ContextWithCredential(t.Context(), original)
 
-		retrieved, ok := CredentialsFromContext[simpleCredentials](ctx)
+		retrieved, ok := CredentialFromContext[simpleCredential](ctx)
 		if !ok {
 			t.Fatal("expected credentials to be present")
 		}
@@ -67,15 +67,15 @@ func TestContextCredentials(t *testing.T) {
 
 func TestNewHandler(t *testing.T) {
 	t.Run("success passes context to next handler", func(t *testing.T) {
-		creds := simpleCredentials{User: "alice", Role: "admin"}
+		creds := simpleCredential{User: "alice", Role: "admin"}
 		auth := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-			return ContextWithCredentials(ctx, creds), nil
+			return ContextWithCredential(ctx, creds), nil
 		})
 
-		var receivedCreds simpleCredentials
+		var receivedCreds simpleCredential
 		var credsFound bool
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedCreds, credsFound = CredentialsFromContext[simpleCredentials](r.Context())
+			receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
 			w.WriteHeader(http.StatusOK)
 		})
 
@@ -121,19 +121,19 @@ func TestNewHandler(t *testing.T) {
 	})
 
 	t.Run("tries next authenticator on ErrNotFound", func(t *testing.T) {
-		creds := simpleCredentials{User: "bob", Role: "user"}
+		creds := simpleCredential{User: "bob", Role: "user"}
 
 		auth1 := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
 			return nil, ErrNotFound
 		})
 		auth2 := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-			return ContextWithCredentials(ctx, creds), nil
+			return ContextWithCredential(ctx, creds), nil
 		})
 
-		var receivedCreds simpleCredentials
+		var receivedCreds simpleCredential
 		var credsFound bool
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedCreds, credsFound = CredentialsFromContext[simpleCredentials](r.Context())
+			receivedCreds, credsFound = CredentialFromContext[simpleCredential](r.Context())
 			w.WriteHeader(http.StatusOK)
 		})
 
@@ -157,14 +157,14 @@ func TestNewHandler(t *testing.T) {
 
 func TestMarshalUnmarshal(t *testing.T) {
 	t.Run("JSON struct round trip", func(t *testing.T) {
-		original := jsonCredentials{User: "alice", Pass: "secret123", Role: "admin"}
+		original := jsonCredential{User: "alice", Pass: "secret123", Role: "admin"}
 
 		value, err := Marshal(original)
 		if err != nil {
 			t.Fatalf("Marshal error: %v", err)
 		}
 
-		unmarshaled, err := Unmarshal[jsonCredentials](value)
+		unmarshaled, err := Unmarshal[jsonCredential](value)
 		if err != nil {
 			t.Fatalf("Unmarshal error: %v", err)
 		}

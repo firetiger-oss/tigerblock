@@ -9,16 +9,16 @@ import (
 	"github.com/firetiger-oss/storage/secret"
 )
 
-// SignedURLCredentials contains information extracted from a signed URL.
-type SignedURLCredentials struct {
+// SignedURLCredential contains information extracted from a signed URL.
+type SignedURLCredential struct {
 	Method     string
 	Path       string
 	Expiration time.Time
 }
 
 // NewSignedURLAuthenticator returns an Authenticator that validates URL signatures.
-// It uses secret.Verify to validate the signature and extracts credentials from the URL.
-// On success, injects SignedURLCredentials into context via ContextWithCredentials.
+// It uses secret.Verify to validate the signature and extracts credential from the URL.
+// On success, injects SignedURLCredential into context via ContextWithCredential.
 // Returns ErrNotFound if the URL has no signature parameters.
 func NewSignedURLAuthenticator(store secret.Store) Authenticator {
 	return AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
@@ -28,12 +28,12 @@ func NewSignedURLAuthenticator(store secret.Store) Authenticator {
 		if err := secret.Verify(ctx, store, req.Method, req.URL, time.Now()); err != nil {
 			return nil, err
 		}
-		credentials := SignedURLCredentials{
+		credential := SignedURLCredential{
 			Method:     req.Method,
 			Path:       req.URL.Path,
 			Expiration: parseExpiration(req.URL.Query().Get("expires")),
 		}
-		return ContextWithCredentials(ctx, credentials), nil
+		return ContextWithCredential(ctx, credential), nil
 	})
 }
 

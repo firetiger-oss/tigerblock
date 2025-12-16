@@ -20,7 +20,7 @@ var ErrUnauthorized = errors.New("unauthorized")
 var ErrNotFound = errors.New("credentials not found")
 
 // Authenticator provides an interface for HTTP request authentication.
-// Authenticate returns a context with credentials injected (via ContextWithCredentials).
+// Authenticate returns a context with credential injected (via ContextWithCredential).
 // This design allows composing multiple authentication schemes.
 type Authenticator interface {
 	Authenticate(ctx context.Context, req *http.Request) (context.Context, error)
@@ -34,21 +34,46 @@ func (f AuthenticatorFunc) Authenticate(ctx context.Context, req *http.Request) 
 	return f(ctx, req)
 }
 
+// Loader loads credentials by identifier.
+type Loader[C any] interface {
+	Load(ctx context.Context, id string) (C, error)
+}
+
+// LoaderFunc adapts a function to the Loader interface.
+type LoaderFunc[C any] func(ctx context.Context, id string) (C, error)
+
+// Load implements Loader.
+func (f LoaderFunc[C]) Load(ctx context.Context, id string) (C, error) {
+	return f(ctx, id)
+}
+
+// NewLoader returns a Loader that loads credentials from a secret.Store.
+func NewLoader[C any](store secret.Store) Loader[C] {
+	return LoaderFunc[C](func(ctx context.Context, id string) (C, error) {
+		value, _, err := store.GetSecret(ctx, id)
+		if err != nil {
+			var zero C
+			return zero, err
+		}
+		return Unmarshal[C](value)
+	})
+}
+
 // credentialsContextKey is a generic context key type for credentials.
 type credentialsContextKey struct{}
 
-// CredentialsFromContext retrieves credentials from the context.
-// Returns the credentials and true if present, zero value and false otherwise.
+// CredentialFromContext retrieves a credential from the context.
+// Returns the credential and true if present, zero value and false otherwise.
 //
-// To load any credentials from the context and perform type assertion later,
-// use ContextWithCredentials[any].
-func CredentialsFromContext[Credentials any](ctx context.Context) (Credentials, bool) {
-	creds, ok := ctx.Value(credentialsContextKey{}).(Credentials)
+// To load any credential from the context and perform type assertion later,
+// use ContextWithCredential[any].
+func CredentialFromContext[Credential any](ctx context.Context) (Credential, bool) {
+	creds, ok := ctx.Value(credentialsContextKey{}).(Credential)
 	return creds, ok
 }
 
-// ContextWithCredentials returns a new context with credentials.
-func ContextWithCredentials[Credentials any](ctx context.Context, creds Credentials) context.Context {
+// ContextWithCredential returns a new context with a credential.
+func ContextWithCredential[Credential any](ctx context.Context, creds Credential) context.Context {
 	return context.WithValue(ctx, credentialsContextKey{}, creds)
 }
 
@@ -74,19 +99,19 @@ func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler
 	})
 }
 
-// Unmarshal decodes a secret value into credentials.
+// Unmarshal decodes a secret value into a credential.
 // It supports types that implement encoding.TextUnmarshaler, encoding.BinaryUnmarshaler,
 // string-based types, []byte, or JSON-deserializable structs.
-func Unmarshal[Credentials any](value secret.Value) (Credentials, error) {
-	var credentials Credentials
-	switch c := any(&credentials).(type) {
+func Unmarshal[Credential any](value secret.Value) (Credential, error) {
+	var credential Credential
+	switch c := any(&credential).(type) {
 	case encoding.TextUnmarshaler:
 		if err := c.UnmarshalText(value); err != nil {
-			return credentials, err
+			return credential, err
 		}
 	case encoding.BinaryUnmarshaler:
 		if err := c.UnmarshalBinary(value); err != nil {
-			return credentials, err
+			return credential, err
 		}
 	default:
 		switch v := reflect.ValueOf(c).Elem(); v.Kind() {
@@ -97,22 +122,22 @@ func Unmarshal[Credentials any](value secret.Value) (Credentials, error) {
 				v.SetBytes(value)
 			} else {
 				if err := json.Unmarshal(value, c); err != nil {
-					return credentials, err
+					return credential, err
 				}
 			}
 		default:
 			if err := json.Unmarshal(value, c); err != nil {
-				return credentials, err
+				return credential, err
 			}
 		}
 	}
-	return credentials, nil
+	return credential, nil
 }
 
-// Marshal encodes credentials into a secret value.
+// Marshal encodes a credential into a secret value.
 // It supports types that implement encoding.TextMarshaler, encoding.BinaryMarshaler,
 // string-based types, []byte, or JSON-serializable structs.
-func Marshal[Credentials any](creds Credentials) (secret.Value, error) {
+func Marshal[Credential any](creds Credential) (secret.Value, error) {
 	switch c := any(creds).(type) {
 	case encoding.TextMarshaler:
 		return c.MarshalText()

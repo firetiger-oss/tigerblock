@@ -32,23 +32,23 @@ func init() {
 	serveCmd.Flags().String("presign-secret-id", "", "Secret ID for validating presigned URLs")
 }
 
-// basicAuthCredentials stores a password for basic auth validation.
-type basicAuthCredentials string
+// basicAuthCredential stores a password for basic auth validation.
+type basicAuthCredential string
 
-func (c basicAuthCredentials) String() string {
+func (c basicAuthCredential) String() string {
 	return secret.Value(c).String()
 }
 
-func (c basicAuthCredentials) GoString() string {
+func (c basicAuthCredential) GoString() string {
 	return secret.Value(c).GoString()
 }
 
-func (c basicAuthCredentials) Username() string {
+func (c basicAuthCredential) Username() string {
 	username, _, _ := strings.Cut(string(c), ":")
 	return username
 }
 
-func (c basicAuthCredentials) Password() string {
+func (c basicAuthCredential) Password() string {
 	_, password, _ := strings.Cut(string(c), ":")
 	return password
 }
@@ -83,14 +83,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if basicAuthSecretID != "" {
 		http.DefaultTransport = authn.NewBasicAuthForwarder(http.DefaultTransport)
 
-		authenticators = append(authenticators, authn.NewBasicAuthenticator[basicAuthCredentials](
-			secret.StoreFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		authenticators = append(authenticators, authn.NewBasicAuthenticator(
+			authn.NewLoader[basicAuthCredential](secret.StoreFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
 				if name != basicAuthUsername {
 					return nil, secret.Info{}, secret.ErrNotFound
 				}
 				value, info, err := secret.Get(ctx, basicAuthSecretID, options...)
 				return secret.Value(basicAuthUsername + ":" + string(value)), info, err
-			}),
+			})),
 		))
 	}
 

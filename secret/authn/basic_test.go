@@ -11,23 +11,23 @@ import (
 	"github.com/firetiger-oss/storage/secret"
 )
 
-type testCredentials struct {
+type testCredential struct {
 	User string `json:"username"`
 	Pass string `json:"password"`
 	Role string `json:"role"`
 }
 
-func (c testCredentials) Username() string { return c.User }
-func (c testCredentials) Password() string { return c.Pass }
+func (c testCredential) Username() string { return c.User }
+func (c testCredential) Password() string { return c.Pass }
 
-type stringCredentials string
+type stringCredential string
 
-func (c stringCredentials) Username() string {
+func (c stringCredential) Username() string {
 	username, _, _ := strings.Cut(string(c), ":")
 	return username
 }
 
-func (c stringCredentials) Password() string {
+func (c stringCredential) Password() string {
 	_, password, _ := strings.Cut(string(c), ":")
 	return password
 }
@@ -53,7 +53,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", basicAuth("alice", "secret123"))
@@ -63,7 +63,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		creds, ok := CredentialsFromContext[testCredentials](ctx)
+		creds, ok := CredentialFromContext[testCredential](ctx)
 		if !ok {
 			t.Fatal("expected credentials in context")
 		}
@@ -79,7 +79,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", basicAuth("alice", "wrongpassword"))
@@ -94,7 +94,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", basicAuth("bob", "secret123"))
@@ -109,7 +109,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "/", nil)
 
@@ -123,7 +123,7 @@ func TestNewBasicAuthenticator(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": secret.Value("not json"),
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("Authorization", basicAuth("alice", "secret123"))
@@ -141,9 +141,9 @@ func TestNewBasicAuthenticator(t *testing.T) {
 
 func TestNewBasicAuthForwarder(t *testing.T) {
 	// Helper to create context with credentials and domain
-	contextWithCredsAndDomain := func(creds BasicAuthCredentials, domain string) context.Context {
+	contextWithCredsAndDomain := func(creds BasicAuthCredential, domain string) context.Context {
 		ctx := context.WithValue(t.Context(), basicAuthDomain{}, domain)
-		return ContextWithCredentials(ctx, creds)
+		return ContextWithCredential(ctx, creds)
 	}
 
 	t.Run("injects credentials when domain matches", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 		forwarder := NewBasicAuthForwarder(transport)
 
-		creds := testCredentials{User: "alice", Pass: "secret123"}
+		creds := testCredential{User: "alice", Pass: "secret123"}
 		ctx := contextWithCredsAndDomain(creds, "example.com")
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
@@ -191,7 +191,7 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 		forwarder := NewBasicAuthForwarder(transport)
 
-		creds := testCredentials{User: "alice", Pass: "secret123"}
+		creds := testCredential{User: "alice", Pass: "secret123"}
 		ctx := contextWithCredsAndDomain(creds, "example.com")
 
 		req := httptest.NewRequest("GET", "http://api.example.com/data", nil)
@@ -220,7 +220,7 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 		forwarder := NewBasicAuthForwarder(transport)
 
-		creds := testCredentials{User: "alice", Pass: "secret123"}
+		creds := testCredential{User: "alice", Pass: "secret123"}
 		ctx := contextWithCredsAndDomain(creds, "example.com")
 
 		req := httptest.NewRequest("GET", "http://other-site.com/api", nil)
@@ -245,7 +245,7 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 		forwarder := NewBasicAuthForwarder(transport)
 
-		creds := testCredentials{User: "alice", Pass: "secret123"}
+		creds := testCredential{User: "alice", Pass: "secret123"}
 		ctx := contextWithCredsAndDomain(creds, "example.com")
 
 		// "notexample.com" ends with "example.com" but is not a subdomain
@@ -294,7 +294,7 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 		forwarder := NewBasicAuthForwarder(transport)
 
-		creds := testCredentials{User: "alice", Pass: "secret123"}
+		creds := testCredential{User: "alice", Pass: "secret123"}
 		ctx := contextWithCredsAndDomain(creds, "example.com")
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
@@ -334,7 +334,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "my-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "my-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
 
@@ -370,7 +370,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "my-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "my-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://api.example.com/data", nil)
 
@@ -399,7 +399,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "my-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "my-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://other-site.com/api", nil)
 
@@ -424,7 +424,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "my-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "my-secret", "example.com", transport)
 
 		// "notexample.com" ends with "example.com" but is not a subdomain
 		req := httptest.NewRequest("GET", "http://notexample.com/api", nil)
@@ -447,7 +447,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "missing-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "missing-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
 
@@ -466,7 +466,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "missing-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "missing-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://other-site.com/api", nil)
 
@@ -488,7 +488,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[stringCredentials](store, "my-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[stringCredential](store), "my-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
 
@@ -514,7 +514,7 @@ func TestNewBasicAuthTransport(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		})
 
-		authTransport := NewBasicAuthTransport[testCredentials](store, "json-secret", "example.com", transport)
+		authTransport := NewBasicAuthTransport(NewLoader[testCredential](store), "json-secret", "example.com", transport)
 
 		req := httptest.NewRequest("GET", "http://example.com/api", nil)
 
@@ -630,7 +630,7 @@ func TestBasicAuthenticatorStoresDomainInContext(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "http://api.example.com/resource", nil)
 		req.Host = "api.example.com"
@@ -651,7 +651,7 @@ func TestBasicAuthenticatorStoresDomainInContext(t *testing.T) {
 		store := makeStore(map[string]secret.Value{
 			"alice": credsJSON,
 		})
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		req := httptest.NewRequest("GET", "http://api.example.com:8080/resource", nil)
 		req.Host = "api.example.com:8080"
@@ -685,7 +685,7 @@ func TestBasicAuthEndToEnd(t *testing.T) {
 	}
 
 	t.Run("credentials forwarded to same domain", func(t *testing.T) {
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		// Simulate incoming request to api.example.com
 		incomingReq := httptest.NewRequest("GET", "http://api.example.com/resource", nil)
@@ -725,7 +725,7 @@ func TestBasicAuthEndToEnd(t *testing.T) {
 	})
 
 	t.Run("credentials not forwarded to different domain", func(t *testing.T) {
-		auth := NewBasicAuthenticator[testCredentials](store)
+		auth := NewBasicAuthenticator(NewLoader[testCredential](store))
 
 		// Simulate incoming request to api.example.com
 		incomingReq := httptest.NewRequest("GET", "http://api.example.com/resource", nil)
