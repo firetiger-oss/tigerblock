@@ -93,7 +93,7 @@ type defaultRegistry struct{}
 
 func (r *defaultRegistry) LoadManager(ctx context.Context, identifier string) (Manager, error) {
 	if identifier == "" {
-		return nil, fmt.Errorf("identifier is required")
+		return nil, fmt.Errorf("identifier is required to load a secret manager")
 	}
 
 	globalMutex.RLock()
@@ -104,9 +104,25 @@ func (r *defaultRegistry) LoadManager(ctx context.Context, identifier string) (M
 	// Find matching registry by pattern (iterate in reverse so last registered wins)
 	for _, entry := range slices.Backward(registries) {
 		if entry.pattern.MatchString(identifier) {
-			manager, err := entry.reg.LoadManager(ctx, identifier)
+			// Parse to extract manager ID and optional secret name prefix
+			managerID, secretName, err := entry.reg.ParseSecret(identifier)
 			if err != nil {
 				return nil, err
+			}
+
+			// Load manager using the manager ID (or original identifier if no separation)
+			loadID := managerID
+			if loadID == "" {
+				loadID = identifier
+			}
+			manager, err := entry.reg.LoadManager(ctx, loadID)
+			if err != nil {
+				return nil, err
+			}
+
+			// If a secret name was parsed, use it as a prefix
+			if secretName != "" {
+				manager = Prefix(manager, secretName)
 			}
 
 			// Apply global adapters
