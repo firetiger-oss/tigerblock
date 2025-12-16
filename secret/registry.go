@@ -41,8 +41,8 @@ type registryEntry struct {
 }
 
 var (
-	globalMutex     sync.RWMutex
-	globalAdapters  []Adapter
+	globalMutex      sync.RWMutex
+	globalAdapters   []Adapter
 	globalRegistries []registryEntry
 )
 
@@ -339,4 +339,3 @@ func ListAt(ctx context.Context, registry Registry, managerID string, options ..
 		}
 	}
 }
-

@@ -115,8 +115,7 @@ func (m *instrumentedManager) DeleteSecret(ctx context.Context, name string) err
 
 func (m *instrumentedManager) ListSecrets(ctx context.Context, options ...ListOption) iter.Seq2[Secret, error] {
 	ctx, span := m.tracer.Start(ctx, "secret.List",
-		trace.WithAttributes(
-		),
+		trace.WithAttributes(),
 	)
 	defer span.End()
 

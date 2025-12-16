@@ -255,7 +255,6 @@ func TestListGlobalFunction(t *testing.T) {
 	}
 }
 
-
 func TestInstall(t *testing.T) {
 	// Save original adapters
 	globalMutex.Lock()

@@ -208,4 +208,3 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 		}
 	})
 }
-
