@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/firetiger-oss/storage/memory"
 )
 
 func TestRegister(t *testing.T) {
@@ -46,11 +48,11 @@ func TestLoadManager(t *testing.T) {
 	}()
 
 	mockReg := &mockRegistry{
-		manager: &mockManager{secrets: make(map[string]Value)},
+		manager: NewManager(memory.NewBucket()),
 	}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	manager, err := LoadManager(ctx, "test://location")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -73,7 +75,7 @@ func TestLoadManagerNoMatch(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := LoadManager(ctx, "unknown://location")
 	if err == nil {
 		t.Fatal("expected error for unknown identifier")
@@ -85,7 +87,7 @@ func TestLoadManagerNoMatch(t *testing.T) {
 }
 
 func TestLoadManagerEmpty(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := LoadManager(ctx, "")
 	if err == nil {
 		t.Fatal("expected error for empty identifier")
@@ -108,11 +110,11 @@ func TestCreateGlobalFunction(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	mgr := &mockManager{secrets: make(map[string]Value)}
+	ctx := t.Context()
+	mgr := NewManager(memory.NewBucket())
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
 	info, err := Create(ctx, "test://location/my-secret", Value("value"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -122,7 +124,9 @@ func TestCreateGlobalFunction(t *testing.T) {
 		t.Errorf("expected name 'my-secret', got %q", info.Name)
 	}
 
-	if _, exists := mgr.secrets["my-secret"]; !exists {
+	// Verify secret was created via the API
+	_, _, err = mgr.GetSecret(ctx, "my-secret")
+	if err != nil {
 		t.Error("expected secret to be created")
 	}
 }
@@ -139,13 +143,12 @@ func TestGetGlobalFunction(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	mgr := &mockManager{secrets: map[string]Value{
-		"my-secret": Value("value"),
-	}}
+	ctx := t.Context()
+	mgr := NewManager(memory.NewBucket())
+	mgr.CreateSecret(ctx, "my-secret", Value("value"))
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
 	value, info, err := Get(ctx, "test://location/my-secret")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -172,13 +175,12 @@ func TestUpdateGlobalFunction(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	mgr := &mockManager{secrets: map[string]Value{
-		"my-secret": Value("old-value"),
-	}}
+	ctx := t.Context()
+	mgr := NewManager(memory.NewBucket())
+	mgr.CreateSecret(ctx, "my-secret", Value("old-value"))
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
 	info, err := Update(ctx, "test://location/my-secret", Value("new-value"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -188,8 +190,13 @@ func TestUpdateGlobalFunction(t *testing.T) {
 		t.Errorf("expected name 'my-secret', got %q", info.Name)
 	}
 
-	if string(mgr.secrets["my-secret"]) != "new-value" {
-		t.Errorf("expected updated value, got %q", mgr.secrets["my-secret"])
+	// Verify value was updated via the API
+	value, _, err := mgr.GetSecret(ctx, "my-secret")
+	if err != nil {
+		t.Fatalf("unexpected error getting secret: %v", err)
+	}
+	if string(value) != "new-value" {
+		t.Errorf("expected updated value, got %q", value)
 	}
 }
 
@@ -205,19 +212,20 @@ func TestDeleteGlobalFunction(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	mgr := &mockManager{secrets: map[string]Value{
-		"my-secret": Value("value"),
-	}}
+	ctx := t.Context()
+	mgr := NewManager(memory.NewBucket())
+	mgr.CreateSecret(ctx, "my-secret", Value("value"))
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
 	err := Delete(ctx, "test://location/my-secret")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, exists := mgr.secrets["my-secret"]; exists {
+	// Verify secret was deleted via the API
+	_, _, err = mgr.GetSecret(ctx, "my-secret")
+	if err != ErrNotFound {
 		t.Error("expected secret to be deleted")
 	}
 }
@@ -234,14 +242,13 @@ func TestListGlobalFunction(t *testing.T) {
 		globalMutex.Unlock()
 	}()
 
-	mgr := &mockManagerWithList{secrets: map[string]Value{
-		"secret1": Value("value1"),
-		"secret2": Value("value2"),
-	}}
+	ctx := t.Context()
+	mgr := NewManager(memory.NewBucket())
+	mgr.CreateSecret(ctx, "secret1", Value("value1"))
+	mgr.CreateSecret(ctx, "secret2", Value("value2"))
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	ctx := context.Background()
 	count := 0
 	for _, err := range List(ctx, "test://location") {
 		if err != nil {
@@ -281,7 +288,7 @@ func TestInstall(t *testing.T) {
 }
 
 func TestAdaptManager(t *testing.T) {
-	base := &mockManager{secrets: make(map[string]Value)}
+	base := NewManager(memory.NewBucket())
 
 	callCount := 0
 	adapter1 := AdapterFunc(func(m Manager) Manager {
@@ -305,7 +312,7 @@ func TestAdaptManager(t *testing.T) {
 }
 
 func TestAdapterFunc(t *testing.T) {
-	base := &mockManager{secrets: make(map[string]Value)}
+	base := NewManager(memory.NewBucket())
 
 	called := false
 	adapter := AdapterFunc(func(m Manager) Manager {

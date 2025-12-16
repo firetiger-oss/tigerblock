@@ -40,7 +40,7 @@ func TestSignAndVerify(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -75,7 +75,7 @@ func TestSignAndVerifyWithVersion(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -115,7 +115,7 @@ func TestVerifyExpiredSignature(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestVerifyInvalidSignature(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -190,7 +190,7 @@ func TestVerifyMissingParameters(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tests := []struct {
 		name string
@@ -228,7 +228,7 @@ func TestVerifyWrongMethod(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -265,7 +265,7 @@ func TestVerifyVersionMismatch(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path/to/object")
 	if err != nil {
@@ -301,7 +301,7 @@ func TestVerifyUnknownSecret(t *testing.T) {
 		secrets: map[string]mockSecret{},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path?s=unknown&expires=9999999999&sig=abc123")
 	if err != nil {
@@ -351,7 +351,7 @@ func TestSignPreservesExistingQueryParams(t *testing.T) {
 	}
 
 	signer := NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	u, err := url.Parse("https://example.com/path?existing=param")
 	if err != nil {

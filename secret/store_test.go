@@ -6,7 +6,7 @@ import (
 )
 
 func TestStoreFunc(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("delegates to function", func(t *testing.T) {
 		called := false

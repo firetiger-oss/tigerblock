@@ -1,18 +1,19 @@
-package secret
+package secret_test
 
 import (
-	"context"
 	"errors"
 	"testing"
+
+	"github.com/firetiger-oss/storage/memory"
+	"github.com/firetiger-oss/storage/secret"
 )
 
 func TestReadOnly(t *testing.T) {
-	ctx := context.Background()
-	base := &mockManagerWithList{secrets: map[string]Value{
-		"existing": Value("value"),
-	}}
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	base.CreateSecret(ctx, "existing", secret.Value("value"))
 
-	ro := ReadOnly(base)
+	ro := secret.ReadOnly(base)
 
 	t.Run("Get allows read", func(t *testing.T) {
 		value, info, err := ro.GetSecret(ctx, "existing")
@@ -28,21 +29,21 @@ func TestReadOnly(t *testing.T) {
 	})
 
 	t.Run("Create returns ErrReadOnly", func(t *testing.T) {
-		_, err := ro.CreateSecret(ctx, "new", Value("value"))
+		_, err := ro.CreateSecret(ctx, "new", secret.Value("value"))
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !errors.Is(err, ErrReadOnly) {
+		if !errors.Is(err, secret.ErrReadOnly) {
 			t.Errorf("expected ErrReadOnly, got %v", err)
 		}
 	})
 
 	t.Run("Update returns ErrReadOnly", func(t *testing.T) {
-		_, err := ro.UpdateSecret(ctx, "existing", Value("new-value"))
+		_, err := ro.UpdateSecret(ctx, "existing", secret.Value("new-value"))
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !errors.Is(err, ErrReadOnly) {
+		if !errors.Is(err, secret.ErrReadOnly) {
 			t.Errorf("expected ErrReadOnly, got %v", err)
 		}
 	})
@@ -52,7 +53,7 @@ func TestReadOnly(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !errors.Is(err, ErrReadOnly) {
+		if !errors.Is(err, secret.ErrReadOnly) {
 			t.Errorf("expected ErrReadOnly, got %v", err)
 		}
 	})
@@ -62,7 +63,7 @@ func TestReadOnly(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !errors.Is(err, ErrReadOnly) {
+		if !errors.Is(err, secret.ErrReadOnly) {
 			t.Errorf("expected ErrReadOnly, got %v", err)
 		}
 	})
@@ -82,8 +83,9 @@ func TestReadOnly(t *testing.T) {
 }
 
 func TestWithReadOnly(t *testing.T) {
-	base := &mockManager{secrets: make(map[string]Value)}
-	adapter := WithReadOnly()
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	adapter := secret.WithReadOnly()
 
 	ro := adapter.AdaptManager(base)
 
@@ -91,12 +93,11 @@ func TestWithReadOnly(t *testing.T) {
 		t.Error("expected adapter to return a different manager")
 	}
 
-	ctx := context.Background()
-	_, err := ro.CreateSecret(ctx, "test", Value("value"))
+	_, err := ro.CreateSecret(ctx, "test", secret.Value("value"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !errors.Is(err, ErrReadOnly) {
+	if !errors.Is(err, secret.ErrReadOnly) {
 		t.Errorf("expected ErrReadOnly, got %v", err)
 	}
 }

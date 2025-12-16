@@ -1,11 +1,13 @@
-package secret
+package secret_test
 
 import (
 	"bytes"
-	"context"
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/firetiger-oss/storage/memory"
+	"github.com/firetiger-oss/storage/secret"
 )
 
 func TestWithLogger(t *testing.T) {
@@ -13,17 +15,16 @@ func TestWithLogger(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	ctx := context.Background()
-	base := &mockManagerWithList{secrets: map[string]Value{
-		"existing": Value("secret-value"),
-	}}
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	base.CreateSecret(ctx, "existing", secret.Value("secret-value"))
 
-	logged := WithLogger(logger).AdaptManager(base)
+	logged := secret.WithLogger(logger).AdaptManager(base)
 
 	t.Run("Create logs metadata, not value", func(t *testing.T) {
 		buf.Reset()
 
-		_, err := logged.CreateSecret(ctx, "test-secret", Value("super-secret-value"))
+		_, err := logged.CreateSecret(ctx, "test-secret", secret.Value("super-secret-value"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -81,7 +82,7 @@ func TestWithLogger(t *testing.T) {
 	t.Run("Update logs metadata, not value", func(t *testing.T) {
 		buf.Reset()
 
-		_, err := logged.UpdateSecret(ctx, "existing", Value("new-secret-value"))
+		_, err := logged.UpdateSecret(ctx, "existing", secret.Value("new-secret-value"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -158,8 +159,9 @@ func TestLoggerAdapter(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	base := &mockManager{secrets: make(map[string]Value)}
-	adapter := WithLogger(logger)
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	adapter := secret.WithLogger(logger)
 
 	logged := adapter.AdaptManager(base)
 
@@ -167,9 +169,10 @@ func TestLoggerAdapter(t *testing.T) {
 		t.Error("expected adapter to return a different manager")
 	}
 
-	// Verify it's a logged manager
-	_, ok := logged.(*loggedManager)
-	if !ok {
-		t.Error("expected loggedManager type")
+	// Verify it works as a logged manager by checking that operations are logged
+	buf.Reset()
+	logged.CreateSecret(ctx, "test", secret.Value("value"))
+	if !strings.Contains(buf.String(), "Create") {
+		t.Error("expected log output from wrapped manager")
 	}
 }

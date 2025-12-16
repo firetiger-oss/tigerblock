@@ -1,9 +1,10 @@
-package secret
+package secret_test
 
 import (
-	"context"
 	"testing"
 
+	"github.com/firetiger-oss/storage/memory"
+	"github.com/firetiger-oss/storage/secret"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -18,17 +19,16 @@ func TestInstrument(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	defer otel.SetTracerProvider(trace.NewTracerProvider())
 
-	ctx := context.Background()
-	base := &mockManagerWithList{secrets: map[string]Value{
-		"existing": Value("value"),
-	}}
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	base.CreateSecret(ctx, "existing", secret.Value("value"))
 
-	instrumented := Instrument(base)
+	instrumented := secret.Instrument(base)
 
 	t.Run("Create creates span", func(t *testing.T) {
 		exporter.Reset()
 
-		_, err := instrumented.CreateSecret(ctx, "new-secret", Value("new-value"))
+		_, err := instrumented.CreateSecret(ctx, "new-secret", secret.Value("new-value"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -118,8 +118,9 @@ func TestInstrument(t *testing.T) {
 }
 
 func TestWithInstrumentation(t *testing.T) {
-	base := &mockManager{secrets: make(map[string]Value)}
-	adapter := WithInstrumentation()
+	ctx := t.Context()
+	base := secret.NewManager(memory.NewBucket())
+	adapter := secret.WithInstrumentation()
 
 	instrumented := adapter.AdaptManager(base)
 
@@ -127,9 +128,9 @@ func TestWithInstrumentation(t *testing.T) {
 		t.Error("expected adapter to return a different manager")
 	}
 
-	// Verify it's instrumented
-	_, ok := instrumented.(*instrumentedManager)
-	if !ok {
-		t.Error("expected instrumentedManager type")
+	// Verify it works by performing an operation
+	_, err := instrumented.CreateSecret(ctx, "test", secret.Value("value"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

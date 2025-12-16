@@ -44,7 +44,7 @@ func TestSignedURLAuthenticator(t *testing.T) {
 	}
 
 	signer := secret.NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	originalURL, _ := url.Parse("https://example.com/path/to/object")
 	signedURL, err := signer.Sign(ctx, http.MethodGet, originalURL, time.Now().Add(15*time.Minute))
@@ -88,7 +88,7 @@ func TestSignedURLAuthenticatorNoSignature(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/path/to/object", nil)
 
 	auth := NewSignedURLAuthenticator(store)
-	_, err := auth.Authenticate(context.Background(), req)
+	_, err := auth.Authenticate(t.Context(), req)
 
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got: %v", err)
@@ -106,7 +106,7 @@ func TestSignedURLAuthenticatorExpired(t *testing.T) {
 	}
 
 	signer := secret.NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	originalURL, _ := url.Parse("https://example.com/path/to/object")
 	signedURL, err := signer.Sign(ctx, http.MethodGet, originalURL, time.Now().Add(-1*time.Minute))
@@ -137,7 +137,7 @@ func TestSignedURLAuthenticatorInvalid(t *testing.T) {
 	}
 
 	signer := secret.NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	originalURL, _ := url.Parse("https://example.com/path/to/object")
 	signedURL, err := signer.Sign(ctx, http.MethodGet, originalURL, time.Now().Add(15*time.Minute))
@@ -172,7 +172,7 @@ func TestSignedURLAuthenticatorWrongMethod(t *testing.T) {
 	}
 
 	signer := secret.NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	originalURL, _ := url.Parse("https://example.com/path/to/object")
 	signedURL, err := signer.Sign(ctx, http.MethodGet, originalURL, time.Now().Add(15*time.Minute))
@@ -212,7 +212,7 @@ func TestNewHandlerChaining(t *testing.T) {
 	)
 
 	signer := secret.NewHMAC256(store, "my-secret")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	originalURL, _ := url.Parse("https://example.com/path/to/object")
 	signedURL, err := signer.Sign(ctx, http.MethodGet, originalURL, time.Now().Add(15*time.Minute))

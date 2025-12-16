@@ -1,7 +1,6 @@
 package env
 
 import (
-	"context"
 	"errors"
 	"os"
 	"testing"
@@ -29,7 +28,7 @@ func TestManager(t *testing.T) {
 }
 
 func TestManagerGet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	// Set a test environment variable
@@ -51,7 +50,7 @@ func TestManagerGet(t *testing.T) {
 }
 
 func TestManagerGetNotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	_, _, err := manager.GetSecret(ctx, "NONEXISTENT_SECRET")
@@ -65,7 +64,7 @@ func TestManagerGetNotFound(t *testing.T) {
 }
 
 func TestManagerList(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	// Set some test environment variables
@@ -102,7 +101,7 @@ func TestManagerList(t *testing.T) {
 }
 
 func TestManagerListMaxResults(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	// Set some test environment variables
@@ -129,7 +128,7 @@ func TestManagerListMaxResults(t *testing.T) {
 }
 
 func TestManagerWriteOperationsReturnReadOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	tests := []struct {
@@ -172,7 +171,7 @@ func TestManagerWriteOperationsReturnReadOnly(t *testing.T) {
 }
 
 func TestManagerVersionOperationsNotSupported(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	manager := NewManager()
 
 	t.Run("GetVersion", func(t *testing.T) {
