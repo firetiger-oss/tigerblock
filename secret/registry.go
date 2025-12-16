@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"regexp"
+	"slices"
 	"sync"
 )
 
@@ -100,8 +101,8 @@ func (r *defaultRegistry) LoadManager(ctx context.Context, identifier string) (M
 	adapters := globalAdapters
 	globalMutex.RUnlock()
 
-	// Find matching registry by pattern
-	for _, entry := range registries {
+	// Find matching registry by pattern (iterate in reverse so last registered wins)
+	for _, entry := range slices.Backward(registries) {
 		if entry.pattern.MatchString(identifier) {
 			manager, err := entry.reg.LoadManager(ctx, identifier)
 			if err != nil {
@@ -126,8 +127,8 @@ func (r *defaultRegistry) ParseSecret(identifier string) (string, string, error)
 	registries := globalRegistries
 	globalMutex.RUnlock()
 
-	// Find matching registry by pattern
-	for _, entry := range registries {
+	// Find matching registry by pattern (iterate in reverse so last registered wins)
+	for _, entry := range slices.Backward(registries) {
 		if entry.pattern.MatchString(identifier) {
 			return entry.reg.ParseSecret(identifier)
 		}
