@@ -125,7 +125,7 @@ func TestCreateGlobalFunction(t *testing.T) {
 	}
 
 	// Verify secret was created via the API
-	_, _, err = mgr.GetSecret(ctx, "my-secret")
+	_, _, err = mgr.GetSecretValue(ctx, "my-secret")
 	if err != nil {
 		t.Error("expected secret to be created")
 	}
@@ -149,7 +149,7 @@ func TestGetGlobalFunction(t *testing.T) {
 	mockReg := &mockRegistry{manager: mgr}
 	Register(`^test://`, mockReg)
 
-	value, info, err := Get(ctx, "test://location/my-secret")
+	value, version, err := Get(ctx, "test://location/my-secret")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,8 +158,8 @@ func TestGetGlobalFunction(t *testing.T) {
 		t.Errorf("expected value 'value', got %q", value)
 	}
 
-	if info.Name != "my-secret" {
-		t.Errorf("expected name 'my-secret', got %q", info.Name)
+	if version == "" {
+		t.Error("expected non-empty version")
 	}
 }
 
@@ -191,7 +191,7 @@ func TestUpdateGlobalFunction(t *testing.T) {
 	}
 
 	// Verify value was updated via the API
-	value, _, err := mgr.GetSecret(ctx, "my-secret")
+	value, _, err := mgr.GetSecretValue(ctx, "my-secret")
 	if err != nil {
 		t.Fatalf("unexpected error getting secret: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestDeleteGlobalFunction(t *testing.T) {
 	}
 
 	// Verify secret was deleted via the API
-	_, _, err = mgr.GetSecret(ctx, "my-secret")
+	_, _, err = mgr.GetSecretValue(ctx, "my-secret")
 	if err != ErrNotFound {
 		t.Error("expected secret to be deleted")
 	}

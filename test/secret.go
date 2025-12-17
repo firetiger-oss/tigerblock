@@ -218,7 +218,7 @@ func testCreateAndGet(t *testing.T, manager secret.Manager) {
 		t.Errorf("expected name %q, got %q", name, info.Name)
 	}
 
-	gotValue, gotInfo, err := manager.GetSecret(ctx, name)
+	gotValue, gotVersion, err := manager.GetSecretValue(ctx, name)
 	if err != nil {
 		t.Fatal("unexpected error getting secret:", err)
 	}
@@ -227,8 +227,8 @@ func testCreateAndGet(t *testing.T, manager secret.Manager) {
 		t.Errorf("expected value %q, got %q", value, gotValue)
 	}
 
-	if gotInfo.Name != name {
-		t.Errorf("expected name %q, got %q", name, gotInfo.Name)
+	if gotVersion == "" {
+		t.Error("expected non-empty version")
 	}
 
 	// Clean up
@@ -237,7 +237,7 @@ func testCreateAndGet(t *testing.T, manager secret.Manager) {
 
 func testGetNotExist(t *testing.T, manager secret.Manager) {
 	ctx := t.Context()
-	_, _, err := manager.GetSecret(ctx, "nonexistent-secret-"+randomString())
+	_, _, err := manager.GetSecretValue(ctx, "nonexistent-secret-"+randomString())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -285,7 +285,7 @@ func testUpdate(t *testing.T, manager secret.Manager) {
 		t.Fatal("unexpected error updating secret:", err)
 	}
 
-	gotValue, _, err := manager.GetSecret(ctx, name)
+	gotValue, _, err := manager.GetSecretValue(ctx, name)
 	if err != nil {
 		t.Fatal("unexpected error getting secret:", err)
 	}
@@ -310,7 +310,7 @@ func testDelete(t *testing.T, manager secret.Manager) {
 		t.Fatal("unexpected error deleting secret:", err)
 	}
 
-	_, _, err = manager.GetSecret(ctx, name)
+	_, _, err = manager.GetSecretValue(ctx, name)
 	if err == nil {
 		t.Fatal("expected error getting deleted secret, got nil")
 	}
@@ -403,10 +403,10 @@ func testCreateWithTags(t *testing.T, manager secret.Manager) {
 		t.Error("expected tags to be set, got empty tags")
 	}
 
-	// Verify tags are returned on Get
-	_, gotInfo, err := manager.GetSecret(ctx, name)
+	// Verify tags are returned on GetSecretInfo
+	gotInfo, err := manager.GetSecretInfo(ctx, name)
 	if err != nil {
-		t.Fatal("unexpected error getting secret:", err)
+		t.Fatal("unexpected error getting secret info:", err)
 	}
 
 	if len(gotInfo.Tags) == 0 {
@@ -461,7 +461,7 @@ func testContextCancellation(t *testing.T, manager secret.Manager) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // Cancel immediately
 
-	_, _, err := manager.GetSecret(ctx, "any-secret")
+	_, _, err := manager.GetSecretValue(ctx, "any-secret")
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
@@ -501,7 +501,7 @@ func testListSecretVersions(t *testing.T, manager secret.Manager) {
 func testGetSecretVersionNotFound(t *testing.T, manager secret.Manager) {
 	ctx := t.Context()
 
-	_, _, err := manager.GetSecret(ctx, "nonexistent-"+randomString(), secret.WithVersion("999"))
+	_, _, err := manager.GetSecretValue(ctx, "nonexistent-"+randomString(), secret.WithVersion("999"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -539,7 +539,7 @@ func testDestroySecretVersion(t *testing.T, manager secret.Manager) {
 		}
 
 		// Verify the version is destroyed
-		_, _, err = manager.GetSecret(ctx, name, secret.WithVersion(firstVersion))
+		_, _, err = manager.GetSecretValue(ctx, name, secret.WithVersion(firstVersion))
 		if err == nil {
 			t.Error("expected error getting destroyed version, got nil")
 		}
@@ -567,7 +567,7 @@ func testGetSecretWithVersion(t *testing.T, manager secret.Manager) {
 
 	// Get using WithVersion option
 	if initialVersion != "" {
-		value, _, err := manager.GetSecret(ctx, name, secret.WithVersion(initialVersion))
+		value, _, err := manager.GetSecretValue(ctx, name, secret.WithVersion(initialVersion))
 		if err != nil {
 			t.Fatal("unexpected error getting secret with version:", err)
 		}
@@ -597,7 +597,7 @@ func testUpdateSecretWithDescription(t *testing.T, manager secret.Manager) {
 	}
 
 	// Verify secret was updated
-	value, _, err := manager.GetSecret(ctx, name)
+	value, _, err := manager.GetSecretValue(ctx, name)
 	if err != nil {
 		t.Fatal("unexpected error getting secret:", err)
 	}
@@ -620,7 +620,7 @@ func testCreateSecretWithDescription(t *testing.T, manager secret.Manager) {
 	defer manager.DeleteSecret(ctx, name)
 
 	// Verify secret exists
-	value, _, err := manager.GetSecret(ctx, name)
+	value, _, err := manager.GetSecretValue(ctx, name)
 	if err != nil {
 		t.Fatal("unexpected error getting secret:", err)
 	}

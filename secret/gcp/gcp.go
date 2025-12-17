@@ -114,41 +114,26 @@ func NewManagerFromClient(client Client, projectID string) *Manager {
 
 func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Value, options ...secret.CreateOption) (secret.Info, error) {
 	opts := secret.NewCreateOptions(options...)
-
-	// Build labels (GCP's version of tags)
-	labels := make(map[string]string)
-	for key, val := range opts.Tags() {
-		labels[key] = val
-	}
-
-	// Create the secret
-	secretReq := &secretmanagerpb.CreateSecretRequest{
+	sec, err := m.client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
 		Parent:   m.projectPath,
 		SecretId: name,
 		Secret: &secretmanagerpb.Secret{
-			Labels: labels,
+			Labels: opts.Tags(),
 			Replication: &secretmanagerpb.Replication{
 				Replication: &secretmanagerpb.Replication_Automatic_{
 					Automatic: &secretmanagerpb.Replication_Automatic{},
 				},
 			},
 		},
-	}
-
-	sec, err := m.client.CreateSecret(ctx, secretReq)
+	})
 	if err != nil {
 		return secret.Info{}, convertError(err)
 	}
 
-	// Add the first version with the value
-	versionReq := &secretmanagerpb.AddSecretVersionRequest{
-		Parent: sec.Name,
-		Payload: &secretmanagerpb.SecretPayload{
-			Data: value,
-		},
-	}
-
-	version, err := m.client.AddSecretVersion(ctx, versionReq)
+	version, err := m.client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  sec.Name,
+		Payload: &secretmanagerpb.SecretPayload{Data: value},
+	})
 	if err != nil {
 		return secret.Info{}, convertError(err)
 	}
@@ -161,10 +146,9 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 	}, nil
 }
 
-func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 	opts := secret.NewGetOptions(options...)
 
-	// Build the version path
 	var versionPath string
 	if version := opts.Version(); version != "" {
 		versionPath = m.projectPath + "/secrets/" + name + "/versions/" + version
@@ -176,42 +160,37 @@ func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.
 		Name: versionPath,
 	})
 	if err != nil {
-		return nil, secret.Info{}, convertError(err)
+		return nil, "", convertError(err)
 	}
 
-	info := secret.Info{
-		Name:    name,
-		Version: extractVersionID(result.Name),
-	}
+	return result.Payload.Data, extractVersionID(result.Name), nil
+}
 
-	// Fetch labels (tags) via GetSecret
-	// (AccessSecretVersion doesn't return labels)
-	secretPath := m.projectPath + "/secrets/" + name
-	secretResult, err := m.client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{
-		Name: secretPath,
+func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
+	result, err := m.client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{
+		Name: m.projectPath + "/secrets/" + name,
 	})
-	if err == nil && secretResult.Labels != nil {
-		info.Tags = secretResult.Labels
-		info.CreatedAt = secretResult.CreateTime.AsTime()
+	if err != nil {
+		return secret.Info{}, convertError(err)
 	}
 
-	return result.Payload.Data, info, nil
+	// Note: GCP's GetSecret doesn't return version info directly.
+	// The caller should use ListSecretVersions for version discovery.
+	return secret.Info{
+		Name:      name,
+		CreatedAt: result.CreateTime.AsTime(),
+		Tags:      result.Labels,
+	}, nil
 }
 
 func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Value, options ...secret.UpdateOption) (secret.Info, error) {
 	opts := secret.NewUpdateOptions(options...)
-
-	// Add a new version (GCP doesn't have "update", only new versions)
 	secretPath := m.projectPath + "/secrets/" + name
 
-	versionReq := &secretmanagerpb.AddSecretVersionRequest{
-		Parent: secretPath,
-		Payload: &secretmanagerpb.SecretPayload{
-			Data: value,
-		},
-	}
-
-	version, err := m.client.AddSecretVersion(ctx, versionReq)
+	version, err := m.client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  secretPath,
+		Payload: &secretmanagerpb.SecretPayload{Data: value},
+	})
 	if err != nil {
 		return secret.Info{}, convertError(err)
 	}
@@ -221,14 +200,11 @@ func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Va
 		Version: extractVersionID(version.Name),
 	}
 
-	// Update description/labels if provided
 	if desc := opts.Description(); desc != "" {
-		secretPath := m.projectPath + "/secrets/" + name
+		// Note: GCP doesn't have a description field, but we could use a label
 		_, err := m.client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
 			Secret: &secretmanagerpb.Secret{
-				Name: secretPath,
-				// Note: GCP doesn't have a description field,
-				// but we could use a label
+				Name:   secretPath,
 				Labels: map[string]string{"description": desc},
 			},
 		})
@@ -241,12 +217,9 @@ func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Va
 }
 
 func (m *Manager) DeleteSecret(ctx context.Context, name string) error {
-	secretPath := m.projectPath + "/secrets/" + name
-
-	err := m.client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{
-		Name: secretPath,
-	})
-	return convertError(err)
+	return convertError(m.client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{
+		Name: m.projectPath + "/secrets/" + name,
+	}))
 }
 
 func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption) iter.Seq2[secret.Secret, error] {
@@ -313,10 +286,8 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 	opts := secret.NewListVersionOptions(options...)
 
 	return func(yield func(secret.Version, error) bool) {
-		secretPath := m.projectPath + "/secrets/" + name
-
 		req := &secretmanagerpb.ListSecretVersionsRequest{
-			Parent: secretPath,
+			Parent: m.projectPath + "/secrets/" + name,
 		}
 
 		if maxResults := opts.MaxResults(); maxResults > 0 {
@@ -366,10 +337,8 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 }
 
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
-	versionPath := m.projectPath + "/secrets/" + name + "/versions/" + version
-
 	_, err := m.client.DestroySecretVersion(ctx, &secretmanagerpb.DestroySecretVersionRequest{
-		Name: versionPath,
+		Name: m.projectPath + "/secrets/" + name + "/versions/" + version,
 	})
 	return convertError(err)
 }

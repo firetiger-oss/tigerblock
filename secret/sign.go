@@ -46,7 +46,7 @@ type hmac256Signer struct {
 }
 
 func (s *hmac256Signer) Sign(ctx context.Context, method string, u *url.URL, expiration time.Time) (string, error) {
-	value, info, err := s.provider.GetSecret(ctx, s.secretID)
+	value, version, err := s.provider.GetSecretValue(ctx, s.secretID)
 	if err != nil {
 		return "", err
 	}
@@ -61,8 +61,8 @@ func (s *hmac256Signer) Sign(ctx context.Context, method string, u *url.URL, exp
 	q := signed.Query()
 	q.Set("s", s.secretID)
 	q.Set("expires", strconv.FormatInt(expires, 10))
-	if info.Version != "" {
-		q.Set("v", info.Version)
+	if version != "" {
+		q.Set("v", version)
 	}
 	q.Set("sig", base64.RawURLEncoding.EncodeToString(signature))
 	signed.RawQuery = q.Encode()
@@ -103,7 +103,7 @@ func Verify(ctx context.Context, provider Provider, method string, u *url.URL, n
 		return ErrSignatureInvalid
 	}
 
-	value, _, err := provider.GetSecret(ctx, secretID, WithVersion(q.Get("v")))
+	value, _, err := provider.GetSecretValue(ctx, secretID, WithVersion(q.Get("v")))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrVersionNotFound) {
 			return ErrSignatureInvalid

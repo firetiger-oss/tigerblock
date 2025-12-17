@@ -22,12 +22,12 @@ func (c stringBearerCredential) Token() string { return string(c) }
 
 func TestNewBearerAuthenticator(t *testing.T) {
 	makeProvider := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -318,12 +318,12 @@ func TestNewBearerAuthForwarder(t *testing.T) {
 
 func TestNewBearerAuthTransport(t *testing.T) {
 	makeProvider := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -523,12 +523,12 @@ func TestNewBearerAuthTransport(t *testing.T) {
 
 func TestBearerAuthenticatorStoresDomainInContext(t *testing.T) {
 	makeProvider := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -576,11 +576,11 @@ func TestBearerAuthenticatorStoresDomainInContext(t *testing.T) {
 }
 
 func TestBearerAuthEndToEnd(t *testing.T) {
-	provider := secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+	provider := secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 		if name == "api-token" {
-			return secret.Value("secret-token-123"), secret.Info{Name: name}, nil
+			return secret.Value("secret-token-123"), "", nil
 		}
-		return nil, secret.Info{}, secret.ErrNotFound
+		return nil, "", secret.ErrNotFound
 	})
 
 	t.Run("token forwarded to same domain", func(t *testing.T) {

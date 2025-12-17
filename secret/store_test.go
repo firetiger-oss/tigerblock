@@ -11,17 +11,17 @@ func TestProviderFunc(t *testing.T) {
 	t.Run("delegates to function", func(t *testing.T) {
 		called := false
 		expectedValue := Value("secret-value")
-		expectedInfo := Info{Name: "test-secret"}
+		expectedVersion := "v1"
 
-		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
+		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
 			called = true
 			if name != "test-secret" {
 				t.Errorf("expected name 'test-secret', got %q", name)
 			}
-			return expectedValue, expectedInfo, nil
+			return expectedValue, expectedVersion, nil
 		})
 
-		value, info, err := provider.GetSecret(ctx, "test-secret")
+		value, version, err := provider.GetSecretValue(ctx, "test-secret")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -31,20 +31,20 @@ func TestProviderFunc(t *testing.T) {
 		if string(value) != string(expectedValue) {
 			t.Errorf("expected value %q, got %q", expectedValue, value)
 		}
-		if info.Name != expectedInfo.Name {
-			t.Errorf("expected info.Name %q, got %q", expectedInfo.Name, info.Name)
+		if version != expectedVersion {
+			t.Errorf("expected version %q, got %q", expectedVersion, version)
 		}
 	})
 
 	t.Run("passes options to function", func(t *testing.T) {
 		var receivedOpts *GetOptions
 
-		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
+		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
 			receivedOpts = NewGetOptions(options...)
-			return nil, Info{}, nil
+			return nil, "", nil
 		})
 
-		provider.GetSecret(ctx, "test", WithVersion("v2"))
+		provider.GetSecretValue(ctx, "test", WithVersion("v2"))
 
 		if receivedOpts == nil {
 			t.Fatal("expected options to be passed")
@@ -55,11 +55,11 @@ func TestProviderFunc(t *testing.T) {
 	})
 
 	t.Run("returns error from function", func(t *testing.T) {
-		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
-			return nil, Info{}, ErrNotFound
+		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+			return nil, "", ErrNotFound
 		})
 
-		_, _, err := provider.GetSecret(ctx, "missing")
+		_, _, err := provider.GetSecretValue(ctx, "missing")
 		if err != ErrNotFound {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}

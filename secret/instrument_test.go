@@ -57,10 +57,10 @@ func TestInstrument(t *testing.T) {
 		}
 	})
 
-	t.Run("Get creates span", func(t *testing.T) {
+	t.Run("GetValue creates span", func(t *testing.T) {
 		exporter.Reset()
 
-		_, _, err := instrumented.GetSecret(ctx, "existing")
+		_, _, err := instrumented.GetSecretValue(ctx, "existing")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -70,8 +70,8 @@ func TestInstrument(t *testing.T) {
 			t.Fatalf("expected 1 span, got %d", len(spans))
 		}
 
-		if spans[0].Name != "secret.Get" {
-			t.Errorf("expected span name 'secret.Get', got %q", spans[0].Name)
+		if spans[0].Name != "secret.GetValue" {
+			t.Errorf("expected span name 'secret.GetValue', got %q", spans[0].Name)
 		}
 	})
 
@@ -100,7 +100,7 @@ func TestInstrument(t *testing.T) {
 		exporter.Reset()
 
 		// Try to get non-existent secret
-		_, _, err := instrumented.GetSecret(ctx, "nonexistent")
+		_, _, err := instrumented.GetSecretValue(ctx, "nonexistent")
 		if err == nil {
 			t.Fatal("expected error")
 		}

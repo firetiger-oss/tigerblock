@@ -15,16 +15,13 @@ func TestReadOnly(t *testing.T) {
 
 	ro := secret.ReadOnly(base)
 
-	t.Run("Get allows read", func(t *testing.T) {
-		value, info, err := ro.GetSecret(ctx, "existing")
+	t.Run("GetValue allows read", func(t *testing.T) {
+		value, _, err := ro.GetSecretValue(ctx, "existing")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if string(value) != "value" {
 			t.Errorf("expected value 'value', got %q", value)
-		}
-		if info.Name != "existing" {
-			t.Errorf("expected name 'existing', got %q", info.Name)
 		}
 	})
 

@@ -35,7 +35,7 @@ func TestManagerGet(t *testing.T) {
 	os.Setenv("TEST_SECRET", "test-value")
 	defer os.Unsetenv("TEST_SECRET")
 
-	value, info, err := manager.GetSecret(ctx, "TEST_SECRET")
+	value, version, err := manager.GetSecretValue(ctx, "TEST_SECRET")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,8 +44,9 @@ func TestManagerGet(t *testing.T) {
 		t.Errorf("expected value 'test-value', got %q", value)
 	}
 
-	if info.Name != "TEST_SECRET" {
-		t.Errorf("expected name 'TEST_SECRET', got %q", info.Name)
+	// env vars don't have versions
+	if version != "" {
+		t.Errorf("expected empty version, got %q", version)
 	}
 }
 
@@ -53,7 +54,7 @@ func TestManagerGetNotFound(t *testing.T) {
 	ctx := t.Context()
 	manager := NewManager()
 
-	_, _, err := manager.GetSecret(ctx, "NONEXISTENT_SECRET")
+	_, _, err := manager.GetSecretValue(ctx, "NONEXISTENT_SECRET")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -175,7 +176,7 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 	manager := NewManager()
 
 	t.Run("GetVersion", func(t *testing.T) {
-		_, _, err := manager.GetSecret(ctx, "test", secret.WithVersion("v1"))
+		_, _, err := manager.GetSecretValue(ctx, "test", secret.WithVersion("v1"))
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

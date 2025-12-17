@@ -2,7 +2,6 @@ package aws
 
 import (
 	"context"
-	"fmt"
 	"iter"
 	"time"
 
@@ -89,58 +88,50 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 	}, nil
 }
 
-func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 	opts := secret.NewGetOptions(options...)
-
-	input := &secretsmanager.GetSecretValueInput{
-		SecretId: aws.String(name),
-	}
-
+	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(name)}
 	if version := opts.Version(); version != "" {
 		input.VersionId = aws.String(version)
 	}
 
 	result, err := m.client.GetSecretValue(ctx, input)
 	if err != nil {
-		return nil, secret.Info{}, convertError(err)
+		return nil, "", convertError(err)
 	}
 
-	var value secret.Value
 	if result.SecretBinary != nil {
-		value = result.SecretBinary
-	} else if result.SecretString != nil {
-		value = secret.Value(*result.SecretString)
+		return result.SecretBinary, aws.ToString(result.VersionId), nil
 	}
-
-	info := secret.Info{
-		Name:      name,
-		Version:   aws.ToString(result.VersionId),
-		CreatedAt: aws.ToTime(result.CreatedDate),
+	if result.SecretString != nil {
+		return secret.Value(*result.SecretString), aws.ToString(result.VersionId), nil
 	}
+	return nil, aws.ToString(result.VersionId), nil
+}
 
-	// Fetch tags via DescribeSecret (GetSecretValue doesn't return tags)
-	descResult, err := m.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
+	result, err := m.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(name),
 	})
-	if err == nil && descResult.Tags != nil {
-		info.Tags = make(map[string]string, len(descResult.Tags))
-		for _, tag := range descResult.Tags {
-			info.Tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-		}
+	if err != nil {
+		return secret.Info{}, convertError(err)
 	}
-
-	return value, info, nil
+	return secret.Info{
+		Name:        name,
+		Version:     currentVersion(result.VersionIdsToStages),
+		CreatedAt:   aws.ToTime(result.CreatedDate),
+		UpdatedAt:   aws.ToTime(result.LastChangedDate),
+		Description: aws.ToString(result.Description),
+		Tags:        makeTags(result.Tags),
+	}, nil
 }
 
 func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Value, options ...secret.UpdateOption) (secret.Info, error) {
 	opts := secret.NewUpdateOptions(options...)
-
-	input := &secretsmanager.PutSecretValueInput{
+	result, err := m.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(name),
 		SecretBinary: value,
-	}
-
-	result, err := m.client.PutSecretValue(ctx, input)
+	})
 	if err != nil {
 		return secret.Info{}, convertError(err)
 	}
@@ -150,7 +141,6 @@ func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Va
 		Version: aws.ToString(result.VersionId),
 	}
 
-	// If description is provided, update it separately
 	if desc := opts.Description(); desc != "" {
 		_, err := m.client.UpdateSecret(ctx, &secretsmanager.UpdateSecretInput{
 			SecretId:    aws.String(name),
@@ -186,7 +176,6 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 				input.MaxResults = aws.Int32(int32(maxResults))
 			}
 
-			// Build filters for tags
 			if len(opts.Tags()) > 0 {
 				for key, value := range opts.Tags() {
 					input.Filters = append(input.Filters, types.Filter{
@@ -200,7 +189,6 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 				}
 			}
 
-			// Add name prefix filter if specified
 			if prefix := opts.NamePrefix(); prefix != "" {
 				input.Filters = append(input.Filters, types.Filter{
 					Key:    types.FilterNameStringTypeName,
@@ -215,17 +203,11 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 			}
 
 			for _, s := range output.SecretList {
-				// Convert AWS tags to map
-				tags := make(map[string]string)
-				for _, tag := range s.Tags {
-					tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-				}
-
 				sec := secret.Secret{
 					Name:      aws.ToString(s.Name),
 					CreatedAt: aws.ToTime(s.CreatedDate),
 					UpdatedAt: aws.ToTime(s.LastChangedDate),
-					Tags:      tags,
+					Tags:      makeTags(s.Tags),
 				}
 
 				if !yield(sec, nil) {
@@ -236,6 +218,7 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 			if output.NextToken == nil {
 				break
 			}
+
 			nextToken = output.NextToken
 		}
 	}
@@ -263,27 +246,10 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 			}
 
 			for _, versionEntry := range output.Versions {
-				// Determine state based on version stages
-				state := secret.VersionStateDisabled
-				for _, stage := range versionEntry.VersionStages {
-					if stage == "AWSCURRENT" {
-						state = secret.VersionStateEnabled
-						break
-					}
-				}
+				state := versionState(versionEntry.VersionStages)
 
-				// Filter by state if specified
-				if len(opts.States()) > 0 {
-					found := false
-					for _, s := range opts.States() {
-						if s == state {
-							found = true
-							break
-						}
-					}
-					if !found {
-						continue
-					}
+				if !matchState(state, opts.States()) {
+					continue
 				}
 
 				version := secret.Version{
@@ -300,6 +266,7 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 			if output.NextToken == nil {
 				break
 			}
+
 			nextToken = output.NextToken
 		}
 	}
@@ -308,6 +275,48 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	// AWS doesn't support destroying individual versions
 	// Versions are automatically removed after the secret is deleted
-	return fmt.Errorf("destroying individual versions is not supported "+
-		"by AWS Secrets Manager: %w", secret.ErrVersionNotFound)
+	return nil
+}
+
+func currentVersion(versionIdsToStages map[string][]string) string {
+	for vid, stages := range versionIdsToStages {
+		for _, stage := range stages {
+			if stage == "AWSCURRENT" {
+				return vid
+			}
+		}
+	}
+	return ""
+}
+
+func makeTags(tags []types.Tag) map[string]string {
+	if tags == nil {
+		return nil
+	}
+	m := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		m[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	return m
+}
+
+func matchState(state secret.VersionState, filter []secret.VersionState) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, s := range filter {
+		if s == state {
+			return true
+		}
+	}
+	return false
+}
+
+func versionState(stages []string) secret.VersionState {
+	for _, stage := range stages {
+		if stage == "AWSCURRENT" {
+			return secret.VersionStateEnabled
+		}
+	}
+	return secret.VersionStateDisabled
 }

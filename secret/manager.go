@@ -90,9 +90,9 @@ func (m *bucketManager) CreateSecret(ctx context.Context, name string, value Val
 	}, nil
 }
 
-func (m *bucketManager) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
+func (m *bucketManager) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
 	if err := context.Cause(ctx); err != nil {
-		return nil, Info{}, err
+		return nil, "", err
 	}
 
 	opts := NewGetOptions(options...)
@@ -100,7 +100,7 @@ func (m *bucketManager) GetSecret(ctx context.Context, name string, options ...G
 
 	secret, _, err := m.readSecret(ctx, key)
 	if err != nil {
-		return nil, Info{}, err
+		return nil, "", err
 	}
 
 	targetVersion := opts.Version()
@@ -114,11 +114,8 @@ func (m *bucketManager) GetSecret(ctx context.Context, name string, options ...G
 				break
 			}
 		}
-		if version == nil {
-			return nil, Info{}, ErrVersionNotFound
-		}
-		if version.State == VersionStateDestroyed {
-			return nil, Info{}, ErrVersionNotFound
+		if version == nil || version.State == VersionStateDestroyed {
+			return nil, "", ErrVersionNotFound
 		}
 	} else {
 		// Find latest enabled version
@@ -129,13 +126,40 @@ func (m *bucketManager) GetSecret(ctx context.Context, name string, options ...G
 			}
 		}
 		if version == nil {
-			return nil, Info{}, ErrNotFound
+			return nil, "", ErrNotFound
 		}
 	}
 
-	return Value(version.Value), Info{
+	return Value(version.Value), version.ID, nil
+}
+
+func (m *bucketManager) GetSecretInfo(ctx context.Context, name string) (Info, error) {
+	if err := context.Cause(ctx); err != nil {
+		return Info{}, err
+	}
+
+	key := secretKey(name)
+
+	secret, _, err := m.readSecret(ctx, key)
+	if err != nil {
+		return Info{}, err
+	}
+
+	// Find latest enabled version
+	var versionID string
+	for i := len(secret.Versions) - 1; i >= 0; i-- {
+		if secret.Versions[i].State == VersionStateEnabled {
+			versionID = secret.Versions[i].ID
+			break
+		}
+	}
+	if versionID == "" {
+		return Info{}, ErrNotFound
+	}
+
+	return Info{
 		Name:         name,
-		Version:      version.ID,
+		Version:      versionID,
 		CreatedAt:    secret.CreatedAt,
 		UpdatedAt:    secret.UpdatedAt,
 		Tags:         secret.Tags,

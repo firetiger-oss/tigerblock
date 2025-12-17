@@ -238,33 +238,62 @@ func CreateAt(ctx context.Context, registry Registry, secretID string, value Val
 	return manager.CreateSecret(ctx, name, value, options...)
 }
 
-// Get is a convenience function that retrieves a secret using an identifier.
+// Get is a convenience function that retrieves a secret value using an identifier.
 //
 // Example:
 //
 //	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
-//	value, info, err := secret.Get(ctx, secretARN)
-func Get(ctx context.Context, secretID string, options ...GetOption) (Value, Info, error) {
+//	value, version, err := secret.Get(ctx, secretARN)
+func Get(ctx context.Context, secretID string, options ...GetOption) (Value, string, error) {
 	return GetAt(ctx, DefaultRegistry(), secretID, options...)
 }
 
 // GetAt is like Get but uses the specified registry.
-func GetAt(ctx context.Context, registry Registry, secretID string, options ...GetOption) (Value, Info, error) {
+func GetAt(ctx context.Context, registry Registry, secretID string, options ...GetOption) (Value, string, error) {
 	managerID, name, err := registry.ParseSecret(secretID)
 	if err != nil {
-		return nil, Info{}, err
+		return nil, "", err
 	}
 
 	if name == "" {
-		return nil, Info{}, fmt.Errorf("secret name required in identifier: %s", secretID)
+		return nil, "", fmt.Errorf("secret name required in identifier: %s", secretID)
 	}
 
 	manager, err := registry.LoadManager(ctx, managerID)
 	if err != nil {
-		return nil, Info{}, err
+		return nil, "", err
 	}
 
-	return manager.GetSecret(ctx, name, options...)
+	return manager.GetSecretValue(ctx, name, options...)
+}
+
+// GetInfo is a convenience function that retrieves secret metadata using an identifier.
+//
+// Example:
+//
+//	secretARN := "arn:aws:secretsmanager:us-east-1:123456789012:secret:mydb"
+//	info, err := secret.GetInfo(ctx, secretARN)
+func GetInfo(ctx context.Context, secretID string) (Info, error) {
+	return GetInfoAt(ctx, DefaultRegistry(), secretID)
+}
+
+// GetInfoAt is like GetInfo but uses the specified registry.
+func GetInfoAt(ctx context.Context, registry Registry, secretID string) (Info, error) {
+	managerID, name, err := registry.ParseSecret(secretID)
+	if err != nil {
+		return Info{}, err
+	}
+
+	if name == "" {
+		return Info{}, fmt.Errorf("secret name required in identifier: %s", secretID)
+	}
+
+	manager, err := registry.LoadManager(ctx, managerID)
+	if err != nil {
+		return Info{}, err
+	}
+
+	return manager.GetSecretInfo(ctx, name)
 }
 
 // Update is a convenience function that updates a secret using an identifier.

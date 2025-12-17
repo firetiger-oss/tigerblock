@@ -39,8 +39,12 @@ func (m *readonlyManager) DestroySecretVersion(ctx context.Context, name string,
 }
 
 // Read operations are passed through to the underlying manager
-func (m *readonlyManager) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
-	return m.Manager.GetSecret(ctx, name, options...)
+func (m *readonlyManager) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+	return m.Manager.GetSecretValue(ctx, name, options...)
+}
+
+func (m *readonlyManager) GetSecretInfo(ctx context.Context, name string) (Info, error) {
+	return m.Manager.GetSecretInfo(ctx, name)
 }
 
 func (m *readonlyManager) ListSecrets(ctx context.Context, options ...ListOption) iter.Seq2[Secret, error] {

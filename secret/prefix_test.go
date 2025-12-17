@@ -23,27 +23,24 @@ func TestPrefix(t *testing.T) {
 			t.Errorf("expected name 'db-password', got %q", info.Name)
 		}
 		// Verify the underlying manager has the prefixed name
-		_, _, err = base.GetSecret(ctx, "prod/db-password")
+		_, _, err = base.GetSecretValue(ctx, "prod/db-password")
 		if err != nil {
 			t.Error("expected prefixed secret in base manager")
 		}
 	})
 
-	t.Run("Get uses prefix", func(t *testing.T) {
-		value, info, err := prefixed.GetSecret(ctx, "db-password")
+	t.Run("GetValue uses prefix", func(t *testing.T) {
+		value, _, err := prefixed.GetSecretValue(ctx, "db-password")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if string(value) != "secret123" {
 			t.Errorf("expected value 'secret123', got %q", value)
 		}
-		if info.Name != "db-password" {
-			t.Errorf("expected name 'db-password', got %q", info.Name)
-		}
 	})
 
 	t.Run("Get returns ErrNotFound for missing secret", func(t *testing.T) {
-		_, _, err := prefixed.GetSecret(ctx, "nonexistent")
+		_, _, err := prefixed.GetSecretValue(ctx, "nonexistent")
 		if !errors.Is(err, secret.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
@@ -58,7 +55,7 @@ func TestPrefix(t *testing.T) {
 			t.Errorf("expected name 'db-password', got %q", info.Name)
 		}
 		// Verify the value was updated
-		value, _, _ := prefixed.GetSecret(ctx, "db-password")
+		value, _, _ := prefixed.GetSecretValue(ctx, "db-password")
 		if string(value) != "newsecret" {
 			t.Errorf("expected updated value 'newsecret', got %q", value)
 		}
@@ -113,7 +110,7 @@ func TestPrefix(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		// Verify it's gone from base
-		_, _, err = base.GetSecret(ctx, "prod/api-key")
+		_, _, err = base.GetSecretValue(ctx, "prod/api-key")
 		if !errors.Is(err, secret.ErrNotFound) {
 			t.Error("expected secret to be deleted from base manager")
 		}
@@ -126,7 +123,7 @@ func TestPrefix(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		// Verify we can't get version 1 anymore
-		_, _, err = prefixed.GetSecret(ctx, "db-password", secret.WithVersion("1"))
+		_, _, err = prefixed.GetSecretValue(ctx, "db-password", secret.WithVersion("1"))
 		if !errors.Is(err, secret.ErrVersionNotFound) {
 			t.Errorf("expected ErrVersionNotFound, got %v", err)
 		}
@@ -150,7 +147,7 @@ func TestWithPrefix(t *testing.T) {
 	}
 
 	// Verify prefix was applied
-	_, _, err = base.GetSecret(ctx, "test/secret")
+	_, _, err = base.GetSecretValue(ctx, "test/secret")
 	if err != nil {
 		t.Error("expected prefixed secret in base manager")
 	}
@@ -168,8 +165,8 @@ func TestPrefixIsolation(t *testing.T) {
 	staging.CreateSecret(ctx, "db-password", secret.Value("staging-secret"))
 
 	// Verify isolation
-	prodValue, _, _ := prod.GetSecret(ctx, "db-password")
-	stagingValue, _, _ := staging.GetSecret(ctx, "db-password")
+	prodValue, _, _ := prod.GetSecretValue(ctx, "db-password")
+	stagingValue, _, _ := staging.GetSecretValue(ctx, "db-password")
 
 	if string(prodValue) != "prod-secret" {
 		t.Errorf("expected 'prod-secret', got %q", prodValue)
@@ -179,11 +176,11 @@ func TestPrefixIsolation(t *testing.T) {
 	}
 
 	// Verify base has both with full prefixed names
-	_, _, err := base.GetSecret(ctx, "prod/db-password")
+	_, _, err := base.GetSecretValue(ctx, "prod/db-password")
 	if err != nil {
 		t.Error("expected 'prod/db-password' in base")
 	}
-	_, _, err = base.GetSecret(ctx, "staging/db-password")
+	_, _, err = base.GetSecretValue(ctx, "staging/db-password")
 	if err != nil {
 		t.Error("expected 'staging/db-password' in base")
 	}

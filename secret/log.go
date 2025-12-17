@@ -47,30 +47,54 @@ func (m *loggedManager) CreateSecret(ctx context.Context, name string, value Val
 	return info, nil
 }
 
-func (m *loggedManager) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
-	m.logger.InfoContext(ctx, "getting secret",
-		slog.String("operation", "Get"),
+func (m *loggedManager) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+	m.logger.InfoContext(ctx, "getting secret value",
+		slog.String("operation", "GetValue"),
 		slog.String("name", name),
 	)
 
-	value, info, err := m.Manager.GetSecret(ctx, name, options...)
+	value, version, err := m.Manager.GetSecretValue(ctx, name, options...)
 	if err != nil {
-		m.logger.ErrorContext(ctx, "failed to get secret",
-			slog.String("operation", "Get"),
+		m.logger.ErrorContext(ctx, "failed to get secret value",
+			slog.String("operation", "GetValue"),
 			slog.String("name", name),
 			slog.String("error", err.Error()),
 		)
-		return value, info, err
+		return value, version, err
 	}
 
 	// NEVER log the actual value - only metadata
-	m.logger.InfoContext(ctx, "got secret",
-		slog.String("operation", "Get"),
+	m.logger.InfoContext(ctx, "got secret value",
+		slog.String("operation", "GetValue"),
 		slog.String("name", name),
-		slog.String("version", info.Version),
+		slog.String("version", version),
 		slog.Int("value_size", len(value)),
 	)
-	return value, info, nil
+	return value, version, nil
+}
+
+func (m *loggedManager) GetSecretInfo(ctx context.Context, name string) (Info, error) {
+	m.logger.InfoContext(ctx, "getting secret info",
+		slog.String("operation", "GetInfo"),
+		slog.String("name", name),
+	)
+
+	info, err := m.Manager.GetSecretInfo(ctx, name)
+	if err != nil {
+		m.logger.ErrorContext(ctx, "failed to get secret info",
+			slog.String("operation", "GetInfo"),
+			slog.String("name", name),
+			slog.String("error", err.Error()),
+		)
+		return info, err
+	}
+
+	m.logger.InfoContext(ctx, "got secret info",
+		slog.String("operation", "GetInfo"),
+		slog.String("name", name),
+		slog.String("version", info.Version),
+	)
+	return info, nil
 }
 
 func (m *loggedManager) UpdateSecret(ctx context.Context, name string, value Value, options ...UpdateOption) (Info, error) {

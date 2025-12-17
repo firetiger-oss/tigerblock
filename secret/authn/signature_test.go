@@ -21,16 +21,16 @@ type mockSecret struct {
 	version string
 }
 
-func (m *mockStore) GetSecret(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+func (m *mockStore) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 	s, ok := m.secrets[name]
 	if !ok {
-		return nil, secret.Info{}, secret.ErrNotFound
+		return nil, "", secret.ErrNotFound
 	}
 	opts := secret.NewGetOptions(options...)
 	if v := opts.Version(); v != "" && v != s.version {
-		return nil, secret.Info{}, secret.ErrVersionNotFound
+		return nil, "", secret.ErrVersionNotFound
 	}
-	return s.value, secret.Info{Name: name, Version: s.version}, nil
+	return s.value, s.version, nil
 }
 
 func TestSignedURLAuthenticator(t *testing.T) {

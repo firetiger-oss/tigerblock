@@ -34,27 +34,40 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 	return secret.Info{}, secret.ErrReadOnly
 }
 
-// Get retrieves an environment variable as a secret.
+// GetSecretValue retrieves an environment variable as a secret value.
 // Returns ErrNotFound if the environment variable is not set.
 // Returns ErrVersionNotFound if a version is requested since env vars don't support versioning.
-func (m *Manager) GetSecret(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 	if err := context.Cause(ctx); err != nil {
-		return nil, secret.Info{}, err
+		return nil, "", err
 	}
 
 	opts := secret.NewGetOptions(options...)
 	if opts.Version() != "" {
-		return nil, secret.Info{}, secret.ErrVersionNotFound
+		return nil, "", secret.ErrVersionNotFound
 	}
 
 	value, ok := os.LookupEnv(name)
 	if !ok {
-		return nil, secret.Info{}, fmt.Errorf("%s: %w", name, secret.ErrNotFound)
+		return nil, "", fmt.Errorf("%s: %w", name, secret.ErrNotFound)
 	}
 
-	return secret.Value(value), secret.Info{
-		Name: name,
-	}, nil
+	return secret.Value(value), "", nil
+}
+
+// GetSecretInfo retrieves metadata about an environment variable.
+// Returns ErrNotFound if the environment variable is not set.
+func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
+	if err := context.Cause(ctx); err != nil {
+		return secret.Info{}, err
+	}
+
+	_, ok := os.LookupEnv(name)
+	if !ok {
+		return secret.Info{}, fmt.Errorf("%s: %w", name, secret.ErrNotFound)
+	}
+
+	return secret.Info{Name: name}, nil
 }
 
 // Update returns ErrReadOnly since the env backend is read-only.

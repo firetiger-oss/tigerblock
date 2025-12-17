@@ -17,16 +17,16 @@ type mockSecret struct {
 	version string
 }
 
-func (m *mockStore) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
+func (m *mockStore) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
 	s, ok := m.secrets[name]
 	if !ok {
-		return nil, Info{}, ErrNotFound
+		return nil, "", ErrNotFound
 	}
 	opts := NewGetOptions(options...)
 	if v := opts.Version(); v != "" && v != s.version {
-		return nil, Info{}, ErrVersionNotFound
+		return nil, "", ErrVersionNotFound
 	}
-	return s.value, Info{Name: name, Version: s.version}, nil
+	return s.value, s.version, nil
 }
 
 func TestSignAndVerify(t *testing.T) {

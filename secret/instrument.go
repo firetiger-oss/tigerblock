@@ -53,26 +53,45 @@ func (m *instrumentedManager) CreateSecret(ctx context.Context, name string, val
 	return info, nil
 }
 
-func (m *instrumentedManager) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
-	ctx, span := m.tracer.Start(ctx, "secret.Get",
+func (m *instrumentedManager) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+	ctx, span := m.tracer.Start(ctx, "secret.GetValue",
 		trace.WithAttributes(
 			attribute.String("secret.name", name),
 		),
 	)
 	defer span.End()
 
-	value, info, err := m.Manager.GetSecret(ctx, name, options...)
+	value, version, err := m.Manager.GetSecretValue(ctx, name, options...)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return value, info, err
+		return value, version, err
 	}
 
 	span.SetAttributes(
-		attribute.String("secret.version", info.Version),
+		attribute.String("secret.version", version),
 		attribute.Int("secret.value_size", len(value)),
 	)
-	return value, info, nil
+	return value, version, nil
+}
+
+func (m *instrumentedManager) GetSecretInfo(ctx context.Context, name string) (Info, error) {
+	ctx, span := m.tracer.Start(ctx, "secret.GetInfo",
+		trace.WithAttributes(
+			attribute.String("secret.name", name),
+		),
+	)
+	defer span.End()
+
+	info, err := m.Manager.GetSecretInfo(ctx, name)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return info, err
+	}
+
+	span.SetAttributes(attribute.String("secret.version", info.Version))
+	return info, nil
 }
 
 func (m *instrumentedManager) UpdateSecret(ctx context.Context, name string, value Value, options ...UpdateOption) (Info, error) {

@@ -34,13 +34,17 @@ func (m *prefixManager) CreateSecret(ctx context.Context, name string, value Val
 	return info, nil
 }
 
-func (m *prefixManager) GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error) {
-	value, info, err := m.Manager.GetSecret(ctx, m.prefix+name, options...)
+func (m *prefixManager) GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+	return m.Manager.GetSecretValue(ctx, m.prefix+name, options...)
+}
+
+func (m *prefixManager) GetSecretInfo(ctx context.Context, name string) (Info, error) {
+	info, err := m.Manager.GetSecretInfo(ctx, m.prefix+name)
 	if err != nil {
-		return value, info, err
+		return info, err
 	}
 	info.Name = strings.TrimPrefix(info.Name, m.prefix)
-	return value, info, nil
+	return info, nil
 }
 
 func (m *prefixManager) UpdateSecret(ctx context.Context, name string, value Value, options ...UpdateOption) (Info, error) {

@@ -36,12 +36,12 @@ func TestNewBasicAuthenticator(t *testing.T) {
 	credsJSON := []byte(`{"username":"alice","password":"secret123","role":"admin"}`)
 
 	makeStore := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -313,12 +313,12 @@ func TestNewBasicAuthForwarder(t *testing.T) {
 
 func TestNewBasicAuthTransport(t *testing.T) {
 	makeStore := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -612,12 +612,12 @@ func TestBasicAuthenticatorStoresDomainInContext(t *testing.T) {
 	credsJSON := []byte(`{"username":"alice","password":"secret123","role":"admin"}`)
 
 	makeStore := func(secrets map[string]secret.Value) secret.Provider {
-		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+		return secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 			value, ok := secrets[name]
 			if !ok {
-				return nil, secret.Info{}, secret.ErrNotFound
+				return nil, "", secret.ErrNotFound
 			}
-			return value, secret.Info{Name: name}, nil
+			return value, "", nil
 		})
 	}
 
@@ -672,11 +672,11 @@ func TestBasicAuthEndToEnd(t *testing.T) {
 	// Test the full flow: authenticate on one domain, forward credentials to same domain
 	credsJSON := []byte(`{"username":"alice","password":"secret123","role":"admin"}`)
 
-	store := secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, secret.Info, error) {
+	store := secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
 		if name == "alice" {
-			return credsJSON, secret.Info{Name: name}, nil
+			return credsJSON, "", nil
 		}
-		return nil, secret.Info{}, secret.ErrNotFound
+		return nil, "", secret.ErrNotFound
 	})
 
 	basicAuth := func(username, password string) string {

@@ -50,10 +50,10 @@ func TestWithLogger(t *testing.T) {
 		}
 	})
 
-	t.Run("Get logs metadata, not value", func(t *testing.T) {
+	t.Run("GetValue logs metadata, not value", func(t *testing.T) {
 		buf.Reset()
 
-		value, _, err := logged.GetSecret(ctx, "existing")
+		value, _, err := logged.GetSecretValue(ctx, "existing")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -61,8 +61,8 @@ func TestWithLogger(t *testing.T) {
 		logOutput := buf.String()
 
 		// Should contain operation and name
-		if !strings.Contains(logOutput, "Get") {
-			t.Error("expected log to contain 'Get'")
+		if !strings.Contains(logOutput, "GetValue") {
+			t.Error("expected log to contain 'GetValue'")
 		}
 		if !strings.Contains(logOutput, "existing") {
 			t.Error("expected log to contain secret name")
@@ -142,7 +142,7 @@ func TestWithLogger(t *testing.T) {
 	t.Run("errors are logged", func(t *testing.T) {
 		buf.Reset()
 
-		_, _, err := logged.GetSecret(ctx, "nonexistent")
+		_, _, err := logged.GetSecretValue(ctx, "nonexistent")
 		if err == nil {
 			t.Fatal("expected error")
 		}

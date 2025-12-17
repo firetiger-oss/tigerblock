@@ -75,10 +75,16 @@ type Manager interface {
 	// Returns ErrAlreadyExists if a secret with this name already exists.
 	CreateSecret(ctx context.Context, name string, value Value, options ...CreateOption) (Info, error)
 
-	// GetSecret retrieves the latest version of a secret by name.
-	// Returns the secret value and metadata.
+	// GetSecretValue retrieves the value of a secret by name.
+	// Returns the secret value and version ID.
+	// Use WithVersion to retrieve a specific version.
 	// Returns ErrNotFound if the secret does not exist.
-	GetSecret(ctx context.Context, name string, options ...GetOption) (Value, Info, error)
+	// Returns ErrVersionNotFound if the specified version does not exist.
+	GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error)
+
+	// GetSecretInfo retrieves metadata about a secret.
+	// Returns ErrNotFound if the secret does not exist.
+	GetSecretInfo(ctx context.Context, name string) (Info, error)
 
 	// UpdateSecret updates an existing secret with a new value.
 	// This may create a new version depending on the backend implementation.
