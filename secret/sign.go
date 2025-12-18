@@ -105,7 +105,7 @@ func Verify(ctx context.Context, provider Provider, method string, u *url.URL, n
 
 	value, _, err := provider.GetSecretValue(ctx, secretID, WithVersion(q.Get("v")))
 	if err != nil {
-		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrVersionNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			return ErrSignatureInvalid
 		}
 		return err

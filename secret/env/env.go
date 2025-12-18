@@ -44,7 +44,7 @@ func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...se
 
 	opts := secret.NewGetOptions(options...)
 	if opts.Version() != "" {
-		return nil, "", secret.ErrVersionNotFound
+		return nil, "", secret.ErrNotFound
 	}
 
 	value, ok := os.LookupEnv(name)

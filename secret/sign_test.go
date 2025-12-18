@@ -24,7 +24,7 @@ func (m *mockStore) GetSecretValue(ctx context.Context, name string, options ...
 	}
 	opts := NewGetOptions(options...)
 	if v := opts.Version(); v != "" && v != s.version {
-		return nil, "", ErrVersionNotFound
+		return nil, "", ErrNotFound
 	}
 	return s.value, s.version, nil
 }

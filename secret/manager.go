@@ -115,7 +115,7 @@ func (m *bucketManager) GetSecretValue(ctx context.Context, name string, options
 			}
 		}
 		if version == nil || version.State == VersionStateDestroyed {
-			return nil, "", ErrVersionNotFound
+			return nil, "", ErrNotFound
 		}
 	} else {
 		// Find latest enabled version
@@ -360,7 +360,7 @@ func (m *bucketManager) DestroySecretVersion(ctx context.Context, name string, v
 	for i := range secret.Versions {
 		if secret.Versions[i].ID == version {
 			if secret.Versions[i].State == VersionStateDestroyed {
-				return ErrVersionNotFound
+				return ErrNotFound
 			}
 			secret.Versions[i].State = VersionStateDestroyed
 			secret.Versions[i].Value = nil // Clear the value
@@ -370,7 +370,7 @@ func (m *bucketManager) DestroySecretVersion(ctx context.Context, name string, v
 	}
 
 	if !found {
-		return ErrVersionNotFound
+		return ErrNotFound
 	}
 
 	return m.writeSecret(ctx, key, secret, etag)

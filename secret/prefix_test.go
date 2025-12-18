@@ -124,8 +124,8 @@ func TestPrefix(t *testing.T) {
 		}
 		// Verify we can't get version 1 anymore
 		_, _, err = prefixed.GetSecretValue(ctx, "db-password", secret.WithVersion("1"))
-		if !errors.Is(err, secret.ErrVersionNotFound) {
-			t.Errorf("expected ErrVersionNotFound, got %v", err)
+		if !errors.Is(err, secret.ErrNotFound) {
+			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 }

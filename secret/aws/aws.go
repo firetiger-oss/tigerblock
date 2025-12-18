@@ -276,7 +276,7 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
 	// AWS doesn't support destroying individual versions
 	// Versions are automatically removed after the secret is deleted
-	return fmt.Errorf("destroying individual versions is not supported by AWS Secrets Manager: %w", secret.ErrVersionNotFound)
+	return fmt.Errorf("destroying individual versions is not supported by AWS Secrets Manager: %w", secret.ErrNotFound)
 }
 
 func currentVersion(versionIdsToStages map[string][]string) string {

@@ -78,8 +78,7 @@ type Manager interface {
 	// GetSecretValue retrieves the value of a secret by name.
 	// Returns the secret value and version ID.
 	// Use WithVersion to retrieve a specific version.
-	// Returns ErrNotFound if the secret does not exist.
-	// Returns ErrVersionNotFound if the specified version does not exist.
+	// Returns ErrNotFound if the secret or version does not exist.
 	GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error)
 
 	// GetSecretInfo retrieves metadata about a secret.
@@ -108,7 +107,7 @@ type Manager interface {
 
 	// DestroySecretVersion permanently destroys a specific version of a secret.
 	// This operation is irreversible.
-	// Returns ErrVersionNotFound if the version does not exist.
+	// Returns ErrNotFound if the version does not exist.
 	DestroySecretVersion(ctx context.Context, name string, version string) error
 }
 
@@ -164,9 +163,6 @@ var (
 
 	// ErrAlreadyExists is returned when attempting to create a secret that already exists.
 	ErrAlreadyExists = errors.New("secret already exists")
-
-	// ErrVersionNotFound is returned when a specific version does not exist.
-	ErrVersionNotFound = errors.New("version not found")
 
 	// ErrReadOnly is returned when attempting write operations on a read-only manager.
 	ErrReadOnly = errors.New("read-only secret manager")

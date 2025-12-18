@@ -180,8 +180,8 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		if !errors.Is(err, secret.ErrVersionNotFound) {
-			t.Errorf("expected ErrVersionNotFound, got %v", err)
+		if !errors.Is(err, secret.ErrNotFound) {
+			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 

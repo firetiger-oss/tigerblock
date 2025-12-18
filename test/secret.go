@@ -194,8 +194,7 @@ func skipIfReadOnlyOrNoDestroy(test func(*testing.T, secret.Manager)) func(*test
 			if strings.Contains(err.Error(), "not supported") {
 				t.Skip("backend does not support version destruction")
 			}
-			if !errors.Is(err, secret.ErrVersionNotFound) &&
-				!errors.Is(err, secret.ErrNotFound) {
+			if !errors.Is(err, secret.ErrNotFound) {
 				t.Skip("backend does not support version destruction")
 			}
 		}
@@ -506,9 +505,8 @@ func testGetSecretVersionNotFound(t *testing.T, manager secret.Manager) {
 		t.Fatal("expected error, got nil")
 	}
 
-	// Should return either ErrNotFound or ErrVersionNotFound
-	if !errors.Is(err, secret.ErrNotFound) && !errors.Is(err, secret.ErrVersionNotFound) {
-		t.Errorf("expected ErrNotFound or ErrVersionNotFound, got %v", err)
+	if !errors.Is(err, secret.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 

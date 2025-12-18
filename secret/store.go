@@ -8,8 +8,7 @@ type Provider interface {
 	// GetSecretValue retrieves a secret value by name.
 	// Returns the value and version ID.
 	// Use WithVersion to retrieve a specific version.
-	// Returns ErrNotFound if the secret does not exist.
-	// Returns ErrVersionNotFound if the version does not exist.
+	// Returns ErrNotFound if the secret or version does not exist.
 	GetSecretValue(ctx context.Context, name string, options ...GetOption) (Value, string, error)
 }
 
