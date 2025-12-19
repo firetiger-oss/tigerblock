@@ -368,14 +368,44 @@ func TestRegistryParseSecret(t *testing.T) {
 			wantManagerID: "arn:aws:secretsmanager:us-east-1:123456789012",
 		},
 		{
-			name:          "incomplete ARN treated as manager ID",
-			identifier:    "arn:aws:secretsmanager:us-east-1",
-			wantManagerID: "arn:aws:secretsmanager:us-east-1",
+			name:       "incomplete ARN without account ID is invalid",
+			identifier: "arn:aws:secretsmanager:us-east-1",
+			wantErr:    true,
 		},
 		{
 			name:       "non-ARN string",
 			identifier: "invalid",
 			wantErr:    true,
+		},
+		{
+			name:           "prefix URI with trailing slash preserves full path",
+			identifier:     "arn:aws:secretsmanager:us-east-1:123456789012:secret:deployments/my-bucket-staging/credentials/",
+			wantManagerID:  "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantSecretName: "deployments/my-bucket-staging/credentials/",
+		},
+		{
+			name:           "prefix URI without trailing slash preserves full path when no AWS suffix",
+			identifier:     "arn:aws:secretsmanager:us-east-1:123456789012:secret:deployments/my-bucket-staging/credentials",
+			wantManagerID:  "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantSecretName: "deployments/my-bucket-staging/credentials",
+		},
+		{
+			name:           "secret name ending with hyphen and non-alphanumeric is preserved",
+			identifier:     "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-name-",
+			wantManagerID:  "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantSecretName: "my-secret-name-",
+		},
+		{
+			name:           "secret name with 5-char suffix is preserved",
+			identifier:     "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-AbCdE",
+			wantManagerID:  "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantSecretName: "my-secret-AbCdE",
+		},
+		{
+			name:           "secret name with 7-char suffix is preserved",
+			identifier:     "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-AbCdEfG",
+			wantManagerID:  "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantSecretName: "my-secret-AbCdEfG",
 		},
 	}
 
