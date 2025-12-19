@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/memory"
@@ -581,4 +582,125 @@ func TestCacheStatWithPageCache(t *testing.T) {
 
 	t.Logf("Page cache stats: Size=%d, Hits=%d, Misses=%d, Evictions=%d",
 		pagesStat.Size, pagesStat.Hits, pagesStat.Misses, pagesStat.Evictions)
+}
+
+// TestCacheTTLDefault tests that the default TTL is 1 minute
+func TestCacheTTLDefault(t *testing.T) {
+	// The default TTL should be 1 minute (DefaultCacheTTL)
+	if storage.DefaultCacheTTL != time.Minute {
+		t.Errorf("DefaultCacheTTL = %v, want %v", storage.DefaultCacheTTL, time.Minute)
+	}
+}
+
+// TestCacheTTLExpiration tests that entries expire after TTL
+func TestCacheTTLExpiration(t *testing.T) {
+	// Create a cache with a very short TTL
+	ttl := 50 * time.Millisecond
+	cache := storage.NewCache(storage.CacheTTL(ttl))
+	memBucket := new(memory.Bucket)
+	bucket := cache.AdaptBucket(memBucket)
+	ctx := context.Background()
+
+	// Put test data
+	testData := []byte("hello world")
+	testKey := "test-ttl"
+	_, err := bucket.PutObject(ctx, testKey, bytes.NewReader(testData))
+	if err != nil {
+		t.Fatalf("Failed to put object: %v", err)
+	}
+
+	// First read - populates cache
+	reader1, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("First GetObject failed: %v", err)
+	}
+	data1, _ := io.ReadAll(reader1)
+	reader1.Close()
+	if !bytes.Equal(data1, testData) {
+		t.Errorf("First read data mismatch: got %v, want %v", data1, testData)
+	}
+
+	// Update the underlying bucket directly (bypassing cache)
+	updatedData := []byte("updated data")
+	_, err = memBucket.PutObject(ctx, testKey, bytes.NewReader(updatedData))
+	if err != nil {
+		t.Fatalf("Failed to update object: %v", err)
+	}
+
+	// Second read immediately - should return cached (old) data
+	reader2, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("Second GetObject failed: %v", err)
+	}
+	data2, _ := io.ReadAll(reader2)
+	reader2.Close()
+	if !bytes.Equal(data2, testData) {
+		t.Errorf("Second read should return cached data, got %v, want %v", data2, testData)
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(ttl + 20*time.Millisecond)
+
+	// Third read after TTL - should return new data (cache expired, re-fetch)
+	reader3, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("Third GetObject failed: %v", err)
+	}
+	data3, _ := io.ReadAll(reader3)
+	reader3.Close()
+	if !bytes.Equal(data3, updatedData) {
+		t.Errorf("Third read should return updated data after TTL expiration, got %v, want %v",
+			data3, updatedData)
+	}
+
+	t.Log("TTL expiration test passed: cache correctly refreshed after TTL")
+}
+
+// TestCacheTTLZeroDisablesExpiration tests that TTL=0 means entries never expire
+func TestCacheTTLZeroDisablesExpiration(t *testing.T) {
+	// Create a cache with TTL=0 (no expiration)
+	cache := storage.NewCache(storage.CacheTTL(0))
+	bucket := cache.AdaptBucket(new(memory.Bucket))
+	ctx := context.Background()
+
+	// Put test data
+	testData := []byte("persistent data")
+	testKey := "test-no-ttl"
+	_, err := bucket.PutObject(ctx, testKey, bytes.NewReader(testData))
+	if err != nil {
+		t.Fatalf("Failed to put object: %v", err)
+	}
+
+	// First read - populates cache
+	reader1, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("First GetObject failed: %v", err)
+	}
+	reader1.Close()
+
+	// Get stats after first read
+	objectsStat1, _, _ := cache.Stat()
+	initialMisses := objectsStat1.Misses
+
+	// Wait a bit (longer than what would be a typical TTL)
+	time.Sleep(100 * time.Millisecond)
+
+	// Second read - should still be a cache hit since TTL=0 means no expiration
+	reader2, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("Second GetObject failed: %v", err)
+	}
+	reader2.Close()
+
+	objectsStat2, _, _ := cache.Stat()
+	if objectsStat2.Misses != initialMisses {
+		t.Errorf("Expected no new misses with TTL=0, but misses increased from %d to %d",
+			initialMisses, objectsStat2.Misses)
+	}
+	if objectsStat2.Hits <= objectsStat1.Hits {
+		t.Errorf("Expected cache hit with TTL=0, but hits did not increase: before=%d, after=%d",
+			objectsStat1.Hits, objectsStat2.Hits)
+	}
+
+	t.Log("TTL=0 (no expiration) test passed")
 }

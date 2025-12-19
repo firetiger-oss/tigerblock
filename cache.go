@@ -17,6 +17,7 @@ const (
 	DefaultObjectInfoCacheSize = 512 * 1024       // 512 KiB
 	DefaultObjectPageCacheSize = 64 * 1024 * 1024 // 64 MiB
 	DefaultObjectCacheSize     = 64 * 1024 * 1024 // 64 MiB
+	DefaultCacheTTL            = time.Minute
 )
 
 // CacheOption is a function type that can be used to configure new Cache
@@ -47,12 +48,20 @@ func ObjectPageCacheSize(size int64) CacheOption {
 	return func(cache *Cache) { cache.pages.Limit = size }
 }
 
+// CacheTTL sets the time-to-live for cached entries. After the TTL expires,
+// entries will be re-fetched on the next access. A TTL of 0 disables expiration.
+// The default TTL is 1 minute.
+func CacheTTL(d time.Duration) CacheOption {
+	return func(cache *Cache) { cache.ttl = d }
+}
+
 // Cache is an in-memory cache for objects read from a Bucket.
 type Cache struct {
-	pages    cache.LRU[objectRange, cachedObject]
-	infos    cache.LRU[string, ObjectInfo]
-	objects  cache.LRU[string, cachedObject]
+	pages    cache.TTL[objectRange, cachedObject]
+	infos    cache.TTL[string, ObjectInfo]
+	objects  cache.TTL[string, cachedObject]
 	pageSize int64
+	ttl      time.Duration
 }
 
 type objectRange struct {
@@ -64,19 +73,21 @@ type objectRange struct {
 // as arguments.
 //
 // By default, the page and object caches are 64MiB each, and the object info
-// cache is 512KiB. The page size for byte ranges is set to 256KiB.
+// cache is 512KiB. The page size for byte ranges is set to 256KiB. The default
+// TTL is 1 minute.
 func NewCache(options ...CacheOption) *Cache {
 	cache := &Cache{
-		pages: cache.LRU[objectRange, cachedObject]{
+		pages: cache.TTL[objectRange, cachedObject]{
 			Limit: DefaultObjectPageCacheSize,
 		},
-		infos: cache.LRU[string, ObjectInfo]{
+		infos: cache.TTL[string, ObjectInfo]{
 			Limit: DefaultObjectInfoCacheSize,
 		},
-		objects: cache.LRU[string, cachedObject]{
+		objects: cache.TTL[string, cachedObject]{
 			Limit: DefaultObjectCacheSize,
 		},
 		pageSize: DefaultCachePageSize,
+		ttl:      DefaultCacheTTL,
 	}
 	for _, option := range options {
 		option(cache)
@@ -88,6 +99,13 @@ func NewCache(options ...CacheOption) *Cache {
 // GetObject.
 func (c *Cache) AdaptBucket(bucket Bucket) Bucket {
 	return &cachedBucket{Cache: c, bucket: bucket}
+}
+
+func (c *Cache) expireAt() time.Time {
+	if c.ttl > 0 {
+		return time.Now().Add(c.ttl)
+	}
+	return time.Time{}
 }
 
 // PageSize returns the size of each page in the cache.
@@ -134,13 +152,14 @@ func (c *cachedBucket) Create(ctx context.Context) error {
 }
 
 func (c *cachedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, error) {
-	return c.infos.Load(key, func() (int64, ObjectInfo, error) {
+	info, _, err := c.infos.Load(key, time.Now(), false, func() (int64, ObjectInfo, time.Time, error) {
 		object, err := c.bucket.HeadObject(ctx, key)
 		size := int64(0)
 		size += int64(len(key))
 		size += sizeOfObjectInfo(object)
-		return size, object, err
+		return size, object, c.expireAt(), err
 	})
+	return info, err
 }
 
 func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...GetOption) (io.ReadCloser, ObjectInfo, error) {
@@ -187,19 +206,19 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 				},
 
 				func(ctx context.Context, thisPageKey objectRange) (cachedObject, error) {
-					return c.pages.Load(thisPageKey, func() (int64, cachedObject, error) {
+					obj, _, err := c.pages.Load(thisPageKey, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
 						thisPageStart := int64(thisPageKey.page) * pageSize
 						thisPageEnd := thisPageStart + pageSize - 1
 						body, info, err := c.bucket.GetObject(ctx, thisPageKey.object,
 							BytesRange(thisPageStart, thisPageEnd))
 						if err != nil {
-							return 0, cachedObject{}, err
+							return 0, cachedObject{}, time.Time{}, err
 						}
 						defer body.Close()
 						pageLength := thisPageEnd - thisPageStart + 1
 						page := make([]byte, min(pageLength, info.Size-thisPageStart))
 						if _, err := io.ReadFull(body, page); err != nil {
-							return 0, cachedObject{}, err
+							return 0, cachedObject{}, time.Time{}, err
 						}
 						object := cachedObject{
 							info: info,
@@ -209,8 +228,9 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 						size += int64(len(thisPageKey.object))
 						size += int64(len(object.body))
 						size += sizeOfObjectInfo(object.info)
-						return size, object, nil
+						return size, object, c.expireAt(), nil
 					})
+					return obj, err
 				},
 			) {
 				if err != nil {
@@ -252,23 +272,23 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		}
 	}
 
-	object, err = c.objects.Load(key, func() (int64, cachedObject, error) {
+	object, _, err = c.objects.Load(key, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
 		var object cachedObject
 		reader, info, err := c.bucket.GetObject(ctx, key)
 		if err != nil {
-			return 0, object, err
+			return 0, object, time.Time{}, err
 		}
 		defer reader.Close()
 		object.info = info
 		object.body = make([]byte, info.Size)
 		if _, err := io.ReadFull(reader, object.body); err != nil {
-			return 0, object, err
+			return 0, object, time.Time{}, err
 		}
 		size := int64(0)
 		size += int64(len(key))
 		size += int64(len(object.body))
 		size += sizeOfObjectInfo(object.info)
-		return size, object, nil
+		return size, object, c.expireAt(), nil
 	})
 	if err != nil {
 		return nil, ObjectInfo{}, err

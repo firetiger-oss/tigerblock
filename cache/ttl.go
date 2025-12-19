@@ -25,18 +25,18 @@ func (c *TTL[K, V]) Drop(ks ...K) {
 	c.lru().Drop(ks...)
 }
 
-func (c *TTL[K, V]) Load(key K, now time.Time, update bool, fetch func() (V, time.Time, error)) (value V, expire time.Time, err error) {
+func (c *TTL[K, V]) Load(key K, now time.Time, update bool, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
 	var promise *Promise[ttlEntry[V]]
 
 	c.mutex.Lock()
 	entry, ok := c.cache.Lookup(key)
-	if !ok || update || now.After(entry.expire) {
+	if !ok || update || (!entry.expire.IsZero() && now.After(entry.expire)) {
 		promise = c.lru().get(key, func() (int64, ttlEntry[V], error) {
-			value, expire, err := fetch()
+			size, value, expire, err := fetch()
 			if err != nil {
 				return 0, ttlEntry[V]{}, err
 			}
-			return 1, ttlEntry[V]{value: value, expire: expire}, nil
+			return size, ttlEntry[V]{value: value, expire: expire}, nil
 		})
 	}
 	c.mutex.Unlock()
