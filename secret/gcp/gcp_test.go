@@ -532,50 +532,39 @@ func TestExtractSecretName(t *testing.T) {
 	}
 }
 
-func TestManagerExtractSecretName(t *testing.T) {
-	mgr := NewManagerFromClient(newMockClient("my-project"), "my-project")
-
+func TestValidateSecretName(t *testing.T) {
 	tests := []struct {
-		name         string
-		resourceName string
-		want         string
-		wantErr      bool
+		name    string
+		input   string
+		wantErr bool
 	}{
 		{
-			name:         "short name",
-			resourceName: "my-secret",
-			want:         "my-secret",
-			wantErr:      false,
+			name:    "simple name is valid",
+			input:   "my-secret",
+			wantErr: false,
 		},
 		{
-			name:         "full path matching project",
-			resourceName: "projects/my-project/secrets/my-secret",
-			want:         "my-secret",
-			wantErr:      false,
+			name:    "full resource path is rejected",
+			input:   "projects/my-project/secrets/my-secret",
+			wantErr: true,
 		},
 		{
-			name:         "full path different project",
-			resourceName: "projects/other-project/secrets/my-secret",
-			want:         "",
-			wantErr:      true,
+			name:    "any projects/ prefix is rejected",
+			input:   "projects/other-project/secrets/other-secret",
+			wantErr: true,
 		},
 		{
-			name:         "full path with numeric project ID mismatch",
-			resourceName: "projects/1094910605637/secrets/conn_abc123",
-			want:         "",
-			wantErr:      true,
+			name:    "name with slashes is valid",
+			input:   "app/database/password",
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := mgr.extractSecretName(tt.resourceName)
+			err := validateSecretName(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("extractSecretName() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("extractSecretName() = %v, want %v", got, tt.want)
+				t.Errorf("validateSecretName() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

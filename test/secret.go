@@ -65,6 +65,10 @@ func TestManager(t *testing.T, loadManager func(*testing.T) (secret.Manager, err
 			function: testList,
 		},
 		{
+			scenario: "listed secret names work with get operations",
+			function: skipIfReadOnly(testListedNamesAreUsable),
+		},
+		{
 			scenario: "listing with name prefix filter",
 			function: testListWithPrefix,
 		},
@@ -345,6 +349,53 @@ func testList(t *testing.T, manager secret.Manager) {
 
 	// Should successfully list secrets (count can be zero for empty lists)
 	// Test passes as long as no error occurred
+}
+
+func testListedNamesAreUsable(t *testing.T, manager secret.Manager) {
+	ctx := t.Context()
+	name := "test-list-usable-" + randomString()
+	value := []byte("test-value")
+
+	// Create a secret
+	_, err := manager.CreateSecret(ctx, name, value)
+	if err != nil {
+		t.Fatal("unexpected error creating secret:", err)
+	}
+	defer manager.DeleteSecret(ctx, name)
+
+	// Find it via ListSecrets
+	var foundName string
+	for s, err := range manager.ListSecrets(ctx) {
+		if err != nil {
+			t.Fatal("unexpected error listing secrets:", err)
+		}
+		if s.Name == name {
+			foundName = s.Name
+			break
+		}
+	}
+
+	if foundName == "" {
+		t.Fatal("created secret not found in list")
+	}
+
+	// Verify the listed name works with GetSecretValue
+	gotValue, _, err := manager.GetSecretValue(ctx, foundName)
+	if err != nil {
+		t.Fatalf("GetSecretValue failed with listed name %q: %v", foundName, err)
+	}
+	if string(gotValue) != string(value) {
+		t.Errorf("GetSecretValue returned wrong value: got %q, want %q", gotValue, value)
+	}
+
+	// Verify the listed name works with GetSecretInfo
+	info, err := manager.GetSecretInfo(ctx, foundName)
+	if err != nil {
+		t.Fatalf("GetSecretInfo failed with listed name %q: %v", foundName, err)
+	}
+	if info.Name != foundName {
+		t.Errorf("GetSecretInfo returned wrong name: got %q, want %q", info.Name, foundName)
+	}
 }
 
 func testListWithPrefix(t *testing.T, manager secret.Manager) {

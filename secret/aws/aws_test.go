@@ -428,3 +428,41 @@ func TestRegistryParseSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateSecretName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{
+			name:    "simple name is valid",
+			input:   "my-secret",
+			wantErr: false,
+		},
+		{
+			name:    "full ARN is rejected",
+			input:   "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-AbCdEf",
+			wantErr: true,
+		},
+		{
+			name:    "manager ARN is rejected",
+			input:   "arn:aws:secretsmanager:us-east-1:123456789012",
+			wantErr: true,
+		},
+		{
+			name:    "name with slashes is valid",
+			input:   "app/database/password",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSecretName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateSecretName() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

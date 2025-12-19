@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,6 +13,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/firetiger-oss/storage/secret"
 )
+
+func validateSecretName(name string) error {
+	if strings.HasPrefix(name, "arn:") {
+		return fmt.Errorf("%w: full ARN not allowed, use simple name", secret.ErrInvalidName)
+	}
+	return nil
+}
 
 // Client defines the subset of secretsmanager.Client methods used by Manager.
 // This allows for mocking in tests.
@@ -56,6 +64,9 @@ func NewManagerFromClient(client Client) *Manager {
 }
 
 func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Value, options ...secret.CreateOption) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	opts := secret.NewCreateOptions(options...)
 
 	var awsTags []types.Tag
@@ -90,6 +101,9 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 }
 
 func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
+	if err := validateSecretName(name); err != nil {
+		return nil, "", err
+	}
 	opts := secret.NewGetOptions(options...)
 	input := &secretsmanager.GetSecretValueInput{SecretId: aws.String(name)}
 	if version := opts.Version(); version != "" {
@@ -111,6 +125,9 @@ func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...se
 }
 
 func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	result, err := m.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(name),
 	})
@@ -128,6 +145,9 @@ func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, 
 }
 
 func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Value, options ...secret.UpdateOption) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	opts := secret.NewUpdateOptions(options...)
 	result, err := m.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
 		SecretId:     aws.String(name),
@@ -156,6 +176,9 @@ func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Va
 }
 
 func (m *Manager) DeleteSecret(ctx context.Context, name string) error {
+	if err := validateSecretName(name); err != nil {
+		return err
+	}
 	_, err := m.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
 		SecretId:                   aws.String(name),
 		ForceDeleteWithoutRecovery: aws.Bool(true),
@@ -227,8 +250,13 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 
 func (m *Manager) ListSecretVersions(ctx context.Context, name string, options ...secret.ListVersionOption) iter.Seq2[secret.Version, error] {
 	opts := secret.NewListVersionOptions(options...)
+	validateErr := validateSecretName(name)
 
 	return func(yield func(secret.Version, error) bool) {
+		if validateErr != nil {
+			yield(secret.Version{}, validateErr)
+			return
+		}
 		var nextToken *string
 		for {
 			input := &secretsmanager.ListSecretVersionIdsInput{

@@ -114,6 +114,9 @@ func NewManagerFromClient(client Client, projectID string) *Manager {
 }
 
 func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Value, options ...secret.CreateOption) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	opts := secret.NewCreateOptions(options...)
 	sec, err := m.client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
 		Parent:   m.projectPath,
@@ -148,11 +151,10 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 }
 
 func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
-	opts := secret.NewGetOptions(options...)
-	name, err := m.extractSecretName(name)
-	if err != nil {
+	if err := validateSecretName(name); err != nil {
 		return nil, "", err
 	}
+	opts := secret.NewGetOptions(options...)
 
 	var versionPath string
 	if version := opts.Version(); version != "" {
@@ -172,8 +174,7 @@ func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...se
 }
 
 func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
-	name, err := m.extractSecretName(name)
-	if err != nil {
+	if err := validateSecretName(name); err != nil {
 		return secret.Info{}, err
 	}
 	result, err := m.client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{
@@ -193,11 +194,10 @@ func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, 
 }
 
 func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Value, options ...secret.UpdateOption) (secret.Info, error) {
-	opts := secret.NewUpdateOptions(options...)
-	name, err := m.extractSecretName(name)
-	if err != nil {
+	if err := validateSecretName(name); err != nil {
 		return secret.Info{}, err
 	}
+	opts := secret.NewUpdateOptions(options...)
 	secretPath := m.projectPath + "/secrets/" + name
 
 	version, err := m.client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
@@ -230,8 +230,7 @@ func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Va
 }
 
 func (m *Manager) DeleteSecret(ctx context.Context, name string) error {
-	name, err := m.extractSecretName(name)
-	if err != nil {
+	if err := validateSecretName(name); err != nil {
 		return err
 	}
 	return convertError(m.client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{
@@ -301,11 +300,11 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 
 func (m *Manager) ListSecretVersions(ctx context.Context, name string, options ...secret.ListVersionOption) iter.Seq2[secret.Version, error] {
 	opts := secret.NewListVersionOptions(options...)
-	name, extractErr := m.extractSecretName(name)
+	validateErr := validateSecretName(name)
 
 	return func(yield func(secret.Version, error) bool) {
-		if extractErr != nil {
-			yield(secret.Version{}, extractErr)
+		if validateErr != nil {
+			yield(secret.Version{}, validateErr)
 			return
 		}
 		req := &secretmanagerpb.ListSecretVersionsRequest{
@@ -359,11 +358,10 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 }
 
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
-	name, err := m.extractSecretName(name)
-	if err != nil {
+	if err := validateSecretName(name); err != nil {
 		return err
 	}
-	_, err = m.client.DestroySecretVersion(ctx, &secretmanagerpb.DestroySecretVersionRequest{
+	_, err := m.client.DestroySecretVersion(ctx, &secretmanagerpb.DestroySecretVersionRequest{
 		Name: m.projectPath + "/secrets/" + name + "/versions/" + version,
 	})
 	return convertError(err)
@@ -371,24 +369,13 @@ func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version
 
 // Helper functions
 
-// extractSecretName extracts the secret name from a full resource path.
-// If the input is already a short name, it is returned as-is.
-// This allows methods to accept both formats:
-//   - Full path: projects/PROJECT_ID/secrets/SECRET_NAME -> SECRET_NAME
-//   - Short name: SECRET_NAME -> SECRET_NAME
-//
-// If the path contains a project ID, it must match the manager's configured
-// project ID, otherwise an error is returned.
-func (m *Manager) extractSecretName(resourceName string) (string, error) {
-	parts := splitPath(resourceName)
-	if len(parts) >= 4 && parts[0] == "projects" && parts[2] == "secrets" {
-		pathProjectID := parts[1]
-		if pathProjectID != m.projectID {
-			return "", fmt.Errorf("%w: path project %q does not match configured project %q", secret.ErrInvalidName, pathProjectID, m.projectID)
-		}
-		return parts[3], nil
+// validateSecretName validates that name is a simple secret name, not a full resource path.
+// Returns an error if the name looks like a full GCP resource path.
+func validateSecretName(name string) error {
+	if hasPrefix(name, "projects/") {
+		return fmt.Errorf("%w: full resource path not allowed, use simple name", secret.ErrInvalidName)
 	}
-	return resourceName, nil
+	return nil
 }
 
 // extractSecretNameFromPath extracts the secret name from a GCP resource path.

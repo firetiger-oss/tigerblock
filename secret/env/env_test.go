@@ -208,3 +208,41 @@ func TestManagerVersionOperationsNotSupported(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateSecretName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{
+			name:    "simple name is valid",
+			input:   "MY_SECRET",
+			wantErr: false,
+		},
+		{
+			name:    "full URI is rejected",
+			input:   "env:MY_SECRET",
+			wantErr: true,
+		},
+		{
+			name:    "name with underscores is valid",
+			input:   "DATABASE_URL",
+			wantErr: false,
+		},
+		{
+			name:    "name with numbers is valid",
+			input:   "SECRET_123",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSecretName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateSecretName() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

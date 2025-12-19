@@ -23,6 +23,15 @@ import (
 	"github.com/firetiger-oss/storage/secret"
 )
 
+// validateSecretName validates that name is a simple environment variable name,
+// not a full URI identifier. Returns an error if the name looks like a full env: URI.
+func validateSecretName(name string) error {
+	if strings.HasPrefix(name, "env:") {
+		return fmt.Errorf("%w: full URI not allowed, use simple name", secret.ErrInvalidName)
+	}
+	return nil
+}
+
 // Manager is a read-only secret manager backed by environment variables.
 type Manager struct{}
 
@@ -31,6 +40,9 @@ func NewManager() *Manager { return new(Manager) }
 
 // Create returns ErrReadOnly since the env backend is read-only.
 func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Value, options ...secret.CreateOption) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	return secret.Info{}, secret.ErrReadOnly
 }
 
@@ -38,6 +50,9 @@ func (m *Manager) CreateSecret(ctx context.Context, name string, value secret.Va
 // Returns ErrNotFound if the environment variable is not set.
 // Returns ErrVersionNotFound if a version is requested since env vars don't support versioning.
 func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
+	if err := validateSecretName(name); err != nil {
+		return nil, "", err
+	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, "", err
 	}
@@ -58,6 +73,9 @@ func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...se
 // GetSecretInfo retrieves metadata about an environment variable.
 // Returns ErrNotFound if the environment variable is not set.
 func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	if err := context.Cause(ctx); err != nil {
 		return secret.Info{}, err
 	}
@@ -72,11 +90,17 @@ func (m *Manager) GetSecretInfo(ctx context.Context, name string) (secret.Info, 
 
 // Update returns ErrReadOnly since the env backend is read-only.
 func (m *Manager) UpdateSecret(ctx context.Context, name string, value secret.Value, options ...secret.UpdateOption) (secret.Info, error) {
+	if err := validateSecretName(name); err != nil {
+		return secret.Info{}, err
+	}
 	return secret.Info{}, secret.ErrReadOnly
 }
 
 // Delete returns ErrReadOnly since the env backend is read-only.
 func (m *Manager) DeleteSecret(ctx context.Context, name string) error {
+	if err := validateSecretName(name); err != nil {
+		return err
+	}
 	return secret.ErrReadOnly
 }
 
@@ -122,7 +146,13 @@ func (m *Manager) ListSecrets(ctx context.Context, options ...secret.ListOption)
 // ListVersions returns an empty iterator since the env backend doesn't support
 // versioning.
 func (m *Manager) ListSecretVersions(ctx context.Context, name string, options ...secret.ListVersionOption) iter.Seq2[secret.Version, error] {
+	validateErr := validateSecretName(name)
+
 	return func(yield func(secret.Version, error) bool) {
+		if validateErr != nil {
+			yield(secret.Version{}, validateErr)
+			return
+		}
 		// Environment variables don't have versions
 		// Return empty iterator
 	}
@@ -130,5 +160,8 @@ func (m *Manager) ListSecretVersions(ctx context.Context, name string, options .
 
 // DestroySecretVersion returns ErrReadOnly since the env backend is read-only.
 func (m *Manager) DestroySecretVersion(ctx context.Context, name string, version string) error {
+	if err := validateSecretName(name); err != nil {
+		return err
+	}
 	return secret.ErrReadOnly
 }
