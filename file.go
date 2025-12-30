@@ -171,6 +171,7 @@ type file struct {
 	File
 	time time.Time
 	body io.ReadCloser
+	seek int64
 }
 
 func (f *file) Close() error {
@@ -183,15 +184,28 @@ func (f *file) Close() error {
 
 func (f *file) Read(b []byte) (int, error) {
 	if f.body == nil {
-		body, object, err := f.bucket.GetObject(f.ctx, f.key)
+		if f.size < 0 {
+			if _, err := f.Stat(); err != nil {
+				return 0, err
+			}
+		}
+		if f.seek >= f.size {
+			return 0, io.EOF
+		}
+		var opts []GetOption
+		if f.seek > 0 {
+			opts = append(opts, BytesRange(f.seek, f.size-1))
+		}
+		body, object, err := f.bucket.GetObject(f.ctx, f.key, opts...)
 		if err != nil {
 			return 0, err
 		}
 		f.body = body
-		f.size = object.Size
 		f.time = object.LastModified
 	}
-	return f.body.Read(b)
+	n, err := f.body.Read(b)
+	f.seek += int64(n)
+	return n, err
 }
 
 func (f *file) Stat() (fs.FileInfo, error) {
@@ -204,6 +218,65 @@ func (f *file) Stat() (fs.FileInfo, error) {
 		f.time = object.LastModified
 	}
 	return fileInfo{file: f}, nil
+}
+
+func (f *file) Seek(offset int64, whence int) (int64, error) {
+	if f.size < 0 {
+		if _, err := f.Stat(); err != nil {
+			return 0, err
+		}
+	}
+
+	var newOffset int64
+	switch whence {
+	case io.SeekStart:
+		newOffset = offset
+	case io.SeekCurrent:
+		newOffset = f.seek + offset
+	case io.SeekEnd:
+		newOffset = f.size + offset
+	default:
+		return 0, fmt.Errorf("invalid whence: %d", whence)
+	}
+
+	if newOffset < 0 {
+		return 0, fmt.Errorf("negative position: %d", newOffset)
+	}
+
+	if newOffset != f.seek && f.body != nil {
+		f.body.Close()
+		f.body = nil
+	}
+
+	f.seek = newOffset
+	return f.seek, nil
+}
+
+func (f *file) WriteTo(w io.Writer) (int64, error) {
+	if f.body == nil {
+		if f.size < 0 {
+			if _, err := f.Stat(); err != nil {
+				return 0, err
+			}
+		}
+		if f.seek >= f.size {
+			return 0, nil
+		}
+		var opts []GetOption
+		if f.seek > 0 {
+			opts = append(opts, BytesRange(f.seek, f.size-1))
+		}
+		body, object, err := f.bucket.GetObject(f.ctx, f.key, opts...)
+		if err != nil {
+			return 0, err
+		}
+		f.body = body
+		f.time = object.LastModified
+	}
+
+	n, err := io.Copy(w, f.body)
+	f.seek += n
+	return n, err
 }
 
 type fileInfo struct{ file *file }
@@ -295,4 +368,7 @@ func (f *File) WithContext(ctx context.Context) *File {
 
 var (
 	_ io.ReaderAt = (*File)(nil)
+	_ io.ReaderAt = (*file)(nil)
+	_ io.Seeker   = (*file)(nil)
+	_ io.WriterTo = (*file)(nil)
 )
