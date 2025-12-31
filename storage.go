@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/firetiger-oss/storage/cache"
 	"github.com/firetiger-oss/storage/uri"
 )
 
@@ -155,10 +156,31 @@ type Registry interface {
 	LoadBucket(ctx context.Context, bucketURI string) (Bucket, error)
 }
 
-type RegistryFunc func(context.Context, string) (Bucket, error)
+// registryFunc is a caching implementation of Registry.
+type registryFunc struct {
+	load  func(context.Context, string) (Bucket, error)
+	cache cache.Cache[string, Bucket]
+}
 
-func (reg RegistryFunc) LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
-	return reg(ctx, bucketURI)
+// RegistryFunc creates a Registry that caches bucket instances by URI.
+// The load function is called to create buckets on cache miss.
+// Bucket URIs are normalized before lookup to ensure consistent caching.
+func RegistryFunc(load func(context.Context, string) (Bucket, error)) Registry {
+	return &registryFunc{
+		load:  load,
+		cache: *cache.New[string, Bucket](1024),
+	}
+}
+
+func (r *registryFunc) LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
+	// Normalize URI for consistent cache keys
+	scheme, location, path := uri.Split(bucketURI)
+	normalizedURI := uri.Join(scheme, location, path)
+	normalizedURI = strings.TrimSuffix(normalizedURI, "/")
+
+	return r.cache.Load(normalizedURI, func() (Bucket, error) {
+		return r.load(ctx, bucketURI)
+	})
 }
 
 func SingleBucketRegistry(bucket Bucket) Registry {
@@ -170,6 +192,33 @@ func SingleBucketRegistry(bucket Bucket) Registry {
 		}
 		return normalizeBucket(bucket, bucketType, objectURI), nil
 	})
+}
+
+// WithAdapters returns a Registry that applies the given adapters to all
+// buckets loaded from the wrapped registry. This allows custom registries
+// to have adapters applied, similar to how Install() works for the global
+// registry.
+func WithAdapters(registry Registry, adapters ...Adapter) Registry {
+	if len(adapters) == 0 {
+		return registry
+	}
+	return &adaptedRegistry{
+		registry: registry,
+		adapters: slices.Clone(adapters),
+	}
+}
+
+type adaptedRegistry struct {
+	registry Registry
+	adapters []Adapter
+}
+
+func (r *adaptedRegistry) LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
+	bucket, err := r.registry.LoadBucket(ctx, bucketURI)
+	if err != nil {
+		return nil, err
+	}
+	return AdaptBucket(bucket, r.adapters...), nil
 }
 
 var (
@@ -209,11 +258,25 @@ func Install(adapters ...Adapter) {
 	globalMutex.Unlock()
 }
 
+var defaultRegistry = RegistryFunc(loadBucket)
+
+// DefaultRegistry returns the default caching registry that loads buckets
+// from the global registry and applies global adapters.
 func DefaultRegistry() Registry {
-	return RegistryFunc(LoadBucket)
+	return defaultRegistry
 }
 
+// LoadBucket loads a bucket using the default caching registry.
+// Bucket instances are cached by normalized URI to avoid recreating
+// adapters on each call.
 func LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
+	return defaultRegistry.LoadBucket(ctx, bucketURI)
+}
+
+// loadBucket is the internal bucket loading logic (not cached).
+// It looks up the bucket type in the global registry, loads the bucket,
+// normalizes it, and applies global adapters.
+func loadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
 	bucketType, bucketName, objectKey := uri.Split(bucketURI)
 	globalMutex.RLock()
 	bucketAdapters := globalAdapters

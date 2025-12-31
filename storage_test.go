@@ -689,3 +689,151 @@ func TestValidObjectKey(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistryFuncCaching(t *testing.T) {
+	loadCount := 0
+	reg := storage.RegistryFunc(func(ctx context.Context, bucketURI string) (storage.Bucket, error) {
+		loadCount++
+		return &fakeBucket{uri: bucketURI}, nil
+	})
+
+	ctx := t.Context()
+
+	// First load
+	bucket1, err := reg.LoadBucket(ctx, "test://bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second load - should return cached instance
+	bucket2, err := reg.LoadBucket(ctx, "test://bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should be the same instance
+	if bucket1 != bucket2 {
+		t.Error("expected same bucket instance to be returned from cache")
+	}
+
+	// Load function should only have been called once
+	if loadCount != 1 {
+		t.Errorf("expected load function to be called 1 time, got %d", loadCount)
+	}
+
+	// Different URI should trigger a new load
+	bucket3, err := reg.LoadBucket(ctx, "test://other-bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bucket1 == bucket3 {
+		t.Error("expected different bucket instance for different URI")
+	}
+
+	if loadCount != 2 {
+		t.Errorf("expected load function to be called 2 times, got %d", loadCount)
+	}
+}
+
+func TestRegistryFuncURINormalization(t *testing.T) {
+	loadCount := 0
+	reg := storage.RegistryFunc(func(ctx context.Context, bucketURI string) (storage.Bucket, error) {
+		loadCount++
+		return &fakeBucket{uri: bucketURI}, nil
+	})
+
+	ctx := t.Context()
+
+	// Load with trailing slash
+	bucket1, err := reg.LoadBucket(ctx, "test://bucket/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Load without trailing slash - should return same cached instance
+	bucket2, err := reg.LoadBucket(ctx, "test://bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should be the same instance due to URI normalization
+	if bucket1 != bucket2 {
+		t.Error("expected same bucket instance for normalized URIs")
+	}
+
+	// Load function should only have been called once
+	if loadCount != 1 {
+		t.Errorf("expected load function to be called 1 time, got %d", loadCount)
+	}
+}
+
+func TestWithAdapters(t *testing.T) {
+	bucket := memory.NewBucket()
+	baseRegistry := storage.SingleBucketRegistry(bucket)
+
+	// Create a simple adapter that wraps buckets
+	adapterCalled := false
+	adapter := storage.AdapterFunc(func(b storage.Bucket) storage.Bucket {
+		adapterCalled = true
+		return b
+	})
+
+	// Wrap the registry with adapters
+	adaptedReg := storage.WithAdapters(baseRegistry, adapter)
+
+	ctx := t.Context()
+	_, err := adaptedReg.LoadBucket(ctx, bucket.Location())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !adapterCalled {
+		t.Error("expected adapter to be called")
+	}
+}
+
+func TestWithAdaptersEmpty(t *testing.T) {
+	bucket := memory.NewBucket()
+	baseRegistry := storage.SingleBucketRegistry(bucket)
+
+	// WithAdapters with no adapters should return the same registry
+	adaptedReg := storage.WithAdapters(baseRegistry)
+
+	if adaptedReg != baseRegistry {
+		t.Error("expected WithAdapters with no adapters to return same registry")
+	}
+}
+
+func TestWithAdaptersMultiple(t *testing.T) {
+	bucket := memory.NewBucket()
+	baseRegistry := storage.SingleBucketRegistry(bucket)
+
+	// Track the order adapters are called
+	var order []int
+	adapter1 := storage.AdapterFunc(func(b storage.Bucket) storage.Bucket {
+		order = append(order, 1)
+		return b
+	})
+	adapter2 := storage.AdapterFunc(func(b storage.Bucket) storage.Bucket {
+		order = append(order, 2)
+		return b
+	})
+	adapter3 := storage.AdapterFunc(func(b storage.Bucket) storage.Bucket {
+		order = append(order, 3)
+		return b
+	})
+
+	adaptedReg := storage.WithAdapters(baseRegistry, adapter1, adapter2, adapter3)
+
+	ctx := t.Context()
+	_, err := adaptedReg.LoadBucket(ctx, bucket.Location())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Adapters should be called in order
+	if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 3 {
+		t.Errorf("expected adapters to be called in order [1, 2, 3], got %v", order)
+	}
+}
