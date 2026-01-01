@@ -28,6 +28,7 @@ import (
 //
 // The function:
 //   - Respects context concurrency limits from concurrent.Limit(ctx)
+//   - Shares the concurrency pool with nested concurrent calls
 //   - Maintains proper ordering of results
 //   - Handles context cancellation gracefully
 //   - Uses goroutines for concurrent processing
@@ -43,9 +44,26 @@ func Pipeline[Out, In any](
 			err error
 		}
 
+		// Release parent slot if we're in a nested call to avoid deadlock
+		if parentSem, released := releaseParentSlot(ctx); released {
+			defer func() {
+				parentSem.acquire(ctx) // Re-acquire when done
+			}()
+		}
+
+		// Get or create the shared semaphore
+		sem := getSemaphore(ctx)
+		if sem == nil {
+			sem = make(semaphore, Limit(ctx))
+			ctx = context.WithValue(ctx, semaphoreKey{}, sem)
+		}
+
+		// Local semaphore for sub-limiting (effective limit may be lower than semaphore capacity)
+		effectiveLimit := getEffectiveLimit(ctx)
+		localSem := make(semaphore, effectiveLimit)
+
 		type promise chan result
 		promises := make(chan promise)
-		semaphore := make(chan struct{}, Limit(ctx))
 
 		ctx, cancel := context.WithCancel(ctx)
 		go func() {
@@ -62,9 +80,15 @@ func Pipeline[Out, In any](
 					return
 				}
 
-				select {
-				case semaphore <- struct{}{}:
-				case <-ctx.Done():
+				// Acquire from local limiter first (for sub-limiting)
+				if !localSem.acquire(ctx) {
+					resolve <- result{err: context.Cause(ctx)}
+					return
+				}
+
+				// Then acquire from shared semaphore
+				if !sem.acquire(ctx) {
+					localSem.release()
 					resolve <- result{err: context.Cause(ctx)}
 					return
 				}
@@ -72,9 +96,12 @@ func Pipeline[Out, In any](
 				waitGroup.Add(1)
 				go func() {
 					defer waitGroup.Done()
-					defer func() { <-semaphore }()
+					defer sem.release()
+					defer localSem.release()
 
-					out, err := transform(ctx, in)
+					// Mark this goroutine as holding a slot
+					transformCtx := withActiveSlot(ctx, sem)
+					out, err := transform(transformCtx, in)
 					resolve <- result{out: out, err: err}
 				}()
 			}

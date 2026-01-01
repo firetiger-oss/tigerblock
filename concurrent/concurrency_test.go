@@ -408,7 +408,7 @@ func TestProcess(t *testing.T) {
 			for i := range 1000 {
 				select {
 				case <-ctx.Done():
-				case <-time.After(10 * time.Millisecond):
+				case <-time.After(time.Millisecond):
 				}
 				if !yield(i, context.Cause(ctx)) {
 					return
@@ -430,7 +430,7 @@ func TestProcess(t *testing.T) {
 		if count > 10 {
 			t.Errorf("expected cancellation to stop iteration early, but got %d results", count)
 		}
-		if duration > 100*time.Millisecond {
+		if duration > 50*time.Millisecond {
 			t.Errorf("expected cancellation to be fast, but took %v", duration)
 		}
 	})
@@ -459,7 +459,7 @@ func TestProcess(t *testing.T) {
 
 				select {
 				case <-ctx.Done():
-				case <-time.After(10 * time.Millisecond):
+				case <-time.After(time.Millisecond):
 				}
 				yield(job, nil)
 			})
@@ -726,7 +726,7 @@ func TestRun(t *testing.T) {
 
 		process := func(ctx context.Context, job int) (int, error) {
 			select {
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(time.Millisecond):
 				return job, nil
 			case <-ctx.Done():
 				return 0, ctx.Err()
@@ -752,7 +752,7 @@ func TestRun(t *testing.T) {
 		if count > 10 {
 			t.Errorf("expected cancellation to stop processing early, but got %d results", count)
 		}
-		if duration > 100*time.Millisecond {
+		if duration > 50*time.Millisecond {
 			t.Errorf("expected cancellation to be fast, but took %v", duration)
 		}
 	})
@@ -782,7 +782,7 @@ func TestRun(t *testing.T) {
 
 			select {
 			case <-ctx.Done():
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(time.Millisecond):
 			}
 			return job * 2, nil
 		}
@@ -1070,7 +1070,7 @@ func TestRunTasks(t *testing.T) {
 			t.Errorf("expected context.Canceled error, got %v", err)
 		}
 
-		if duration > 100*time.Millisecond {
+		if duration > 50*time.Millisecond {
 			t.Errorf("expected cancellation to be fast, but took %v", duration)
 		}
 	})
@@ -1100,7 +1100,7 @@ func TestRunTasks(t *testing.T) {
 
 			select {
 			case <-ctx.Done():
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(time.Millisecond):
 			}
 			return nil
 		}
@@ -1244,7 +1244,7 @@ func TestRunTasks2(t *testing.T) {
 			atomic.AddInt64(&executed, 1)
 			select {
 			case <-ctx.Done():
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(time.Millisecond):
 			}
 			return nil
 		}
@@ -1304,6 +1304,214 @@ func TestRunVsRunTasks(t *testing.T) {
 		for i, result := range runResults {
 			if i >= len(runTasksExecuted) || result != runTasksExecuted[i] {
 				t.Errorf("result mismatch at index %d: Run got %q, RunTasks got %q", i, result, runTasksExecuted[i])
+			}
+		}
+	})
+}
+
+// TestNestedConcurrency verifies that nested concurrent calls share the same
+// concurrency pool, preventing multiplicative concurrency.
+func TestNestedConcurrency(t *testing.T) {
+	t.Run("nested Run calls share concurrency limit", func(t *testing.T) {
+		const maxConcurrency = 5
+		ctx := concurrent.WithLimit(t.Context(), maxConcurrency)
+
+		var activeWorkers int64
+		var maxActiveWorkers int64
+
+		outerJobs := make([]int, 10)
+		for i := range outerJobs {
+			outerJobs[i] = i
+		}
+
+		innerJobs := []int{1, 2, 3}
+
+		process := func(ctx context.Context, outerJob int) (int, error) {
+			// Each outer job spawns inner jobs
+			innerSum := 0
+			for result, err := range concurrent.Run(ctx, innerJobs, func(ctx context.Context, innerJob int) (int, error) {
+				current := atomic.AddInt64(&activeWorkers, 1)
+				defer atomic.AddInt64(&activeWorkers, -1)
+
+				// Track max concurrent workers
+				for {
+					max := atomic.LoadInt64(&maxActiveWorkers)
+					if current <= max || atomic.CompareAndSwapInt64(&maxActiveWorkers, max, current) {
+						break
+					}
+				}
+
+				time.Sleep(time.Millisecond)
+				return innerJob * outerJob, nil
+			}) {
+				if err != nil {
+					return 0, err
+				}
+				innerSum += result
+			}
+			return innerSum, nil
+		}
+
+		var results []int
+		for result, err := range concurrent.Run(ctx, outerJobs, process) {
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				continue
+			}
+			results = append(results, result)
+		}
+
+		// Verify we got all results
+		if len(results) != len(outerJobs) {
+			t.Errorf("expected %d results, got %d", len(outerJobs), len(results))
+		}
+
+		// Verify concurrency was limited - with nested calls sharing the pool,
+		// we should never exceed maxConcurrency
+		max := atomic.LoadInt64(&maxActiveWorkers)
+		if max > int64(maxConcurrency) {
+			t.Errorf("expected max concurrency of %d, but observed %d concurrent workers", maxConcurrency, max)
+		}
+	})
+
+	t.Run("nested Pipeline calls share concurrency limit", func(t *testing.T) {
+		const maxConcurrency = 4
+		ctx := concurrent.WithLimit(t.Context(), maxConcurrency)
+
+		var activeWorkers int64
+		var maxActiveWorkers int64
+
+		// Create input sequence
+		inputSeq := func(yield func(int, error) bool) {
+			for i := 0; i < 8; i++ {
+				if !yield(i, nil) {
+					return
+				}
+			}
+		}
+
+		// Outer pipeline that spawns inner pipelines
+		outerTransform := func(ctx context.Context, outer int) (int, error) {
+			innerSeq := func(yield func(int, error) bool) {
+				for j := 0; j < 3; j++ {
+					if !yield(j, nil) {
+						return
+					}
+				}
+			}
+
+			sum := 0
+			for result, err := range concurrent.Pipeline(ctx, innerSeq, func(ctx context.Context, inner int) (int, error) {
+				current := atomic.AddInt64(&activeWorkers, 1)
+				defer atomic.AddInt64(&activeWorkers, -1)
+
+				for {
+					max := atomic.LoadInt64(&maxActiveWorkers)
+					if current <= max || atomic.CompareAndSwapInt64(&maxActiveWorkers, max, current) {
+						break
+					}
+				}
+
+				time.Sleep(time.Millisecond)
+				return outer * inner, nil
+			}) {
+				if err != nil {
+					return 0, err
+				}
+				sum += result
+			}
+			return sum, nil
+		}
+
+		var results []int
+		for result, err := range concurrent.Pipeline(ctx, inputSeq, outerTransform) {
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				continue
+			}
+			results = append(results, result)
+		}
+
+		if len(results) != 8 {
+			t.Errorf("expected 8 results, got %d", len(results))
+		}
+
+		max := atomic.LoadInt64(&maxActiveWorkers)
+		if max > int64(maxConcurrency) {
+			t.Errorf("expected max concurrency of %d, but observed %d concurrent workers", maxConcurrency, max)
+		}
+	})
+
+	t.Run("sub-limit respected within shared pool", func(t *testing.T) {
+		const outerLimit = 10
+		const innerLimit = 3
+		ctx := concurrent.WithLimit(t.Context(), outerLimit)
+
+		// Track workers per-inner-Run to verify each Run respects its own limit
+		type runStats struct {
+			maxWorkers int64
+		}
+		var statsMu sync.Mutex
+		var allRunStats []*runStats
+
+		outerJobs := make([]int, 5)
+		for i := range outerJobs {
+			outerJobs[i] = i
+		}
+
+		innerJobs := make([]int, 10)
+		for i := range innerJobs {
+			innerJobs[i] = i
+		}
+
+		process := func(ctx context.Context, outerJob int) (int, error) {
+			// Reduce the limit for inner operations
+			innerCtx := concurrent.WithLimit(ctx, innerLimit)
+
+			// Track workers for this specific inner Run
+			stats := &runStats{}
+			statsMu.Lock()
+			allRunStats = append(allRunStats, stats)
+			statsMu.Unlock()
+
+			var activeWorkers int64
+
+			sum := 0
+			for result, err := range concurrent.Run(innerCtx, innerJobs, func(ctx context.Context, innerJob int) (int, error) {
+				current := atomic.AddInt64(&activeWorkers, 1)
+				defer atomic.AddInt64(&activeWorkers, -1)
+
+				// Track max for this specific Run
+				for {
+					max := atomic.LoadInt64(&stats.maxWorkers)
+					if current <= max || atomic.CompareAndSwapInt64(&stats.maxWorkers, max, current) {
+						break
+					}
+				}
+
+				time.Sleep(time.Millisecond)
+				return innerJob, nil
+			}) {
+				if err != nil {
+					return 0, err
+				}
+				sum += result
+			}
+			return sum, nil
+		}
+
+		for _, err := range concurrent.Run(ctx, outerJobs, process) {
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+
+		// Each individual inner Run should respect its own innerLimit
+		statsMu.Lock()
+		defer statsMu.Unlock()
+		for i, stats := range allRunStats {
+			if stats.maxWorkers > int64(innerLimit) {
+				t.Errorf("inner Run %d exceeded limit: expected max %d, observed %d", i, innerLimit, stats.maxWorkers)
 			}
 		}
 	})

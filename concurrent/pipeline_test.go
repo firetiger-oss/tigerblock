@@ -25,7 +25,7 @@ func TestPipeline(t *testing.T) {
 
 		// Transform that doubles the input
 		transform := func(ctx context.Context, in int) (int, error) {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			return in * 2, nil
 		}
 
@@ -157,7 +157,7 @@ func TestPipeline(t *testing.T) {
 		}
 
 		transform := func(ctx context.Context, in int) (int, error) {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			return in, nil
 		}
 
@@ -200,7 +200,7 @@ func TestPipeline(t *testing.T) {
 				}
 			}
 
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			return in, nil
 		}
 
@@ -274,7 +274,7 @@ func TestExec(t *testing.T) {
 		tasks := make([]func(context.Context) error, 100)
 		for i := range tasks {
 			tasks[i] = func(ctx context.Context) error {
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(time.Millisecond)
 				return nil
 			}
 		}
@@ -309,7 +309,7 @@ func TestExec(t *testing.T) {
 				}
 			}
 
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			return nil
 		}
 
@@ -422,7 +422,7 @@ func TestQuery(t *testing.T) {
 		for i := range queries {
 			i := i
 			queries[i] = func(ctx context.Context) (int, error) {
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(time.Millisecond)
 				return i, nil
 			}
 		}
@@ -497,7 +497,7 @@ func TestQuery(t *testing.T) {
 					}
 				}
 
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(time.Millisecond)
 				return i, nil
 			}
 		}

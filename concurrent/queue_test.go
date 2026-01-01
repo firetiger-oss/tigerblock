@@ -152,7 +152,7 @@ func TestQueueWait(t *testing.T) {
 	// Add jobs
 	for range 3 {
 		q.Push(func(ctx context.Context, yield func(int, error) bool) {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			atomic.AddInt32(&completed, 1)
 			yield(1, nil)
 		})
@@ -209,7 +209,7 @@ func TestQueueFlush(t *testing.T) {
 	select {
 	case <-done:
 		// Success - Wait completed immediately
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond):
 		t.Error("Wait did not complete after flush")
 	}
 }
@@ -233,7 +233,7 @@ func TestQueueDone(t *testing.T) {
 	}()
 
 	// Give the goroutine time to start
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(time.Millisecond)
 
 	// Call Done
 	q.Done()
@@ -242,7 +242,7 @@ func TestQueueDone(t *testing.T) {
 	select {
 	case <-done:
 		// Success
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond):
 		t.Error("Pull did not terminate after Done")
 	}
 
@@ -299,7 +299,7 @@ func TestProcessWithContextCancellation(t *testing.T) {
 		value := i
 		q.Push(func(ctx context.Context, yield func(int, error) bool) {
 			select {
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(10 * time.Millisecond):
 				yield(value, nil)
 			case <-ctx.Done():
 				yield(0, ctx.Err())
@@ -310,21 +310,21 @@ func TestProcessWithContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var count int
+	var count int32
 	go func() {
 		for range Process(ctx, q) {
-			count++
-			if count == 1 {
+			c := atomic.AddInt32(&count, 1)
+			if c == 1 {
 				cancel() // Cancel after processing first item
 			}
 		}
 	}()
 
 	// Give it time to process
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
 	// Should have processed at least one item before cancellation
-	if count == 0 {
+	if atomic.LoadInt32(&count) == 0 {
 		t.Error("expected at least one item to be processed before cancellation")
 	}
 }
@@ -349,7 +349,7 @@ func TestProcessWithConcurrencyLimit(t *testing.T) {
 				}
 			}
 
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			yield(1, nil)
 		})
 	}
@@ -663,7 +663,7 @@ func ExampleProcess() {
 		value := i
 		queue.Push(func(ctx context.Context, yield func(int, error) bool) {
 			// Simulate some work
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 			yield(value*10, nil)
 		})
 	}
@@ -810,7 +810,7 @@ func ExampleQueue_shutdown() {
 			queue.Push(func(ctx context.Context, yield func(string, error) bool) {
 				yield(fmt.Sprintf("work item %d", value), nil)
 			})
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 		}
 		queue.Done() // Signal no more work
 	}()

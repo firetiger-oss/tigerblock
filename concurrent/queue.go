@@ -194,9 +194,9 @@ func (q *Queue[T]) Done() {
 // Process executes jobs from the queue concurrently and returns an iterator
 // of their results.
 //
-// The function creates a pool of worker goroutines (controlled by the context's
-// concurrency limit) that pull jobs from the queue and execute them. Results
-// are collected and yielded through the returned iterator.
+// The function acquires semaphore slots on-demand for each job, respecting the
+// context's concurrency limit. This allows nested Process calls to share the
+// same concurrency pool, preventing multiplicative concurrency.
 //
 // The concurrency level is determined by Limit(ctx). Workers respect context
 // cancellation and will stop processing when the context is cancelled.
@@ -217,6 +217,24 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 			err error
 		}
 
+		// Release parent slot if we're in a nested call to avoid deadlock
+		if parentSem, released := releaseParentSlot(ctx); released {
+			defer func() {
+				parentSem.acquire(ctx) // Re-acquire when done
+			}()
+		}
+
+		// Get or create the shared semaphore
+		sem := getSemaphore(ctx)
+		if sem == nil {
+			sem = make(semaphore, Limit(ctx))
+			ctx = context.WithValue(ctx, semaphoreKey{}, sem)
+		}
+
+		// Local semaphore for sub-limiting (effective limit may be lower than semaphore capacity)
+		effectiveLimit := getEffectiveLimit(ctx)
+		localSem := make(semaphore, effectiveLimit)
+
 		items := make(chan item)
 		group := new(sync.WaitGroup)
 		defer group.Wait()
@@ -224,13 +242,41 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		for range Limit(ctx) {
-			group.Add(1)
-			go func() {
-				defer group.Done()
+		// Goroutine to pull jobs from the queue and spawn workers
+		go func() {
+			for job := range queue.Pull() {
+				// Acquire from local limiter first (for sub-limiting)
+				if !localSem.acquire(ctx) {
+					queue.Flush()
+					queue.Done()
+					select {
+					case items <- item{err: context.Cause(ctx)}:
+					case <-ctx.Done():
+					}
+					return
+				}
 
-				for job := range queue.Pull() {
-					job(ctx, func(val T, err error) bool {
+				// Then acquire from shared semaphore
+				if !sem.acquire(ctx) {
+					localSem.release()
+					queue.Flush()
+					queue.Done()
+					select {
+					case items <- item{err: context.Cause(ctx)}:
+					case <-ctx.Done():
+					}
+					return
+				}
+
+				group.Add(1)
+				go func() {
+					defer group.Done()
+					defer sem.release()
+					defer localSem.release()
+
+					// Mark this goroutine as holding a slot
+					jobCtx := withActiveSlot(ctx, sem)
+					job(jobCtx, func(val T, err error) bool {
 						select {
 						case items <- item{val, err}:
 							return true
@@ -238,10 +284,11 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 							return false
 						}
 					})
-				}
-			}()
-		}
+				}()
+			}
+		}()
 
+		// Goroutine to close the queue when all jobs are processed
 		go func() {
 			queue.Wait()
 			queue.Done()
