@@ -559,6 +559,106 @@ func TestJobType(t *testing.T) {
 	})
 }
 
+func TestProcessWithRecursivePush(t *testing.T) {
+	// Test that workers can push more jobs during execution without panicking.
+	// This tests the fix for the race condition where queue.Done() was called
+	// before workers finished executing (and potentially pushing more jobs).
+	q := NewQueueWithCapacity[int](100)
+
+	// Push an initial job that will recursively push more jobs
+	q.Push(func(ctx context.Context, yield func(int, error) bool) {
+		yield(1, nil)
+		// Push more jobs from within this job
+		q.Push(func(ctx context.Context, yield func(int, error) bool) {
+			yield(2, nil)
+			// Push another level of nested jobs
+			q.Push(func(ctx context.Context, yield func(int, error) bool) {
+				yield(3, nil)
+			})
+		})
+	})
+
+	var results []int
+	var mu sync.Mutex
+
+	ctx := WithLimit(t.Context(), 2)
+	for val, err := range Process(ctx, q) {
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		mu.Lock()
+		results = append(results, val)
+		mu.Unlock()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(results) != 3 {
+		t.Errorf("expected 3 results, got %d: %v", len(results), results)
+	}
+
+	// Check all values are present (order may vary)
+	resultMap := make(map[int]bool)
+	for _, r := range results {
+		resultMap[r] = true
+	}
+	for i := 1; i <= 3; i++ {
+		if !resultMap[i] {
+			t.Errorf("expected result %d not found in %v", i, results)
+		}
+	}
+}
+
+func TestProcessWithManyRecursivePushes(t *testing.T) {
+	// Test with many recursive pushes to stress test the fix
+	q := NewQueueWithCapacity[int](1000)
+
+	const depth = 5
+	const breadth = 3
+
+	var pushRecursive func(ctx context.Context, yield func(int, error) bool, level int)
+	pushRecursive = func(ctx context.Context, yield func(int, error) bool, level int) {
+		yield(level, nil)
+		if level < depth {
+			for range breadth {
+				nextLevel := level + 1
+				q.Push(func(ctx context.Context, yield func(int, error) bool) {
+					pushRecursive(ctx, yield, nextLevel)
+				})
+			}
+		}
+	}
+
+	// Start with initial job
+	q.Push(func(ctx context.Context, yield func(int, error) bool) {
+		pushRecursive(ctx, yield, 1)
+	})
+
+	var count int32
+	ctx := WithLimit(t.Context(), 4)
+	for _, err := range Process(ctx, q) {
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		atomic.AddInt32(&count, 1)
+	}
+
+	// Calculate expected count: 1 + 3 + 9 + 27 + 81 = 121 (geometric series)
+	expected := int32(0)
+	for i := range depth {
+		n := 1
+		for range i {
+			n *= breadth
+		}
+		expected += int32(n)
+	}
+
+	if got := atomic.LoadInt32(&count); got != expected {
+		t.Errorf("expected %d results, got %d", expected, got)
+	}
+}
+
 func TestConcurrentAccess(t *testing.T) {
 	q := NewQueueWithCapacity[int](1000)
 

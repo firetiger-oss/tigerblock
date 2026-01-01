@@ -43,11 +43,12 @@ type Job[T any] func(context.Context, func(T, error) bool)
 //
 // Type parameter T represents the type of values that jobs will produce.
 type Queue[T any] struct {
-	group sync.WaitGroup // tracks outstanding jobs for Wait()
-	mutex sync.Mutex     // protects access to jobs and cap
-	cond  sync.Cond      // signals when jobs become available
-	jobs  []Job[T]       // slice of pending jobs
-	cap   int            // maximum queue capacity, negative means closed
+	group   sync.WaitGroup // tracks outstanding jobs for Wait()
+	mutex   sync.Mutex     // protects access to jobs, cap, and idle
+	cond    sync.Cond      // signals when jobs become available
+	jobs    []Job[T]       // slice of pending jobs
+	cap     int            // maximum queue capacity, negative means closed
+	pulling int            // number of goroutines actively pulling (not blocked)
 }
 
 // NewQueue creates a new job queue with the default capacity.
@@ -132,9 +133,16 @@ func (q *Queue[T]) Pull() iter.Seq[Job[T]] {
 			job := q.jobs[0]
 			q.jobs[0] = nil
 			q.jobs = q.jobs[1:]
+			q.pulling++ // Mark that we're actively processing a job
 			q.mutex.Unlock()
 
 			ack := yield(job)
+
+			q.mutex.Lock()
+			q.pulling-- // Done processing, back to idle
+			q.cond.Broadcast()
+			q.mutex.Unlock()
+
 			q.group.Done()
 
 			if !ack {
@@ -142,6 +150,30 @@ func (q *Queue[T]) Pull() iter.Seq[Job[T]] {
 			}
 		}
 	}
+}
+
+// Idle returns true if the queue is empty and no Pull operations are actively
+// processing jobs (they are either blocked waiting for jobs or have exited).
+// This is useful for determining when all work has been processed.
+//
+// Idle is safe for concurrent use.
+func (q *Queue[T]) Idle() bool {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	return len(q.jobs) == 0 && q.pulling == 0
+}
+
+// WaitIdle blocks until the queue becomes idle (empty and no active pulls).
+// This is useful for waiting until all pushed jobs have been pulled and
+// the callbacks have returned.
+//
+// WaitIdle is safe for concurrent use.
+func (q *Queue[T]) WaitIdle() {
+	q.mutex.Lock()
+	for len(q.jobs) > 0 || q.pulling > 0 {
+		q.cond.Wait()
+	}
+	q.mutex.Unlock()
 }
 
 // Wait blocks until all jobs that have been pushed to the queue have been
@@ -172,6 +204,16 @@ func (q *Queue[T]) Flush() {
 	}
 	q.jobs = nil
 	q.mutex.Unlock()
+}
+
+// Len returns the number of jobs currently in the queue.
+// This is a snapshot and may change immediately after returning.
+//
+// Len is safe for concurrent use.
+func (q *Queue[T]) Len() int {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	return len(q.jobs)
 }
 
 // Done marks the queue as closed for new jobs and signals all blocked consumers
@@ -236,11 +278,24 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 		localSem := make(semaphore, effectiveLimit)
 
 		items := make(chan item)
+		done := make(chan struct{})
 		group := new(sync.WaitGroup)
-		defer group.Wait()
 
 		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+		defer func() {
+			cancel()
+			<-done // Wait for cleanup goroutine to complete
+		}()
+
+		// Track active workers to know when all work is complete.
+		// We use queue.WaitIdle() to know when all pulled jobs have been processed
+		// by the Pull callbacks, and inProgress to track workers still executing.
+		var workers struct {
+			sync.Mutex
+			sync.Cond
+			inProgress int
+		}
+		workers.Cond.L = &workers.Mutex
 
 		// Goroutine to pull jobs from the queue and spawn workers
 		go func() {
@@ -268,11 +323,22 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 					return
 				}
 
+				workers.Lock()
+				workers.inProgress++
+				workers.Unlock()
+
 				group.Add(1)
 				go func() {
-					defer group.Done()
-					defer sem.release()
-					defer localSem.release()
+					defer func() {
+						group.Done()
+						sem.release()
+						localSem.release()
+						// Signal that a worker finished
+						workers.Lock()
+						workers.inProgress--
+						workers.Signal()
+						workers.Unlock()
+					}()
 
 					// Mark this goroutine as holding a slot
 					jobCtx := withActiveSlot(ctx, sem)
@@ -290,7 +356,23 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 
 		// Goroutine to close the queue when all jobs are processed
 		go func() {
-			queue.Wait()
+			defer close(done)
+			var idle bool
+			for !idle {
+				// Wait for queue to become idle (empty and no active pulls).
+				// This ensures all pulled jobs have incremented inProgress.
+				queue.WaitIdle()
+				// Wait for all workers to finish, then check queue is still idle.
+				// We hold the lock while checking to prevent a race where a worker
+				// pushes a new job and the Pull goroutine increments inProgress
+				// between our check and the break.
+				workers.Lock()
+				for workers.inProgress > 0 {
+					workers.Wait()
+				}
+				idle = queue.Idle()
+				workers.Unlock()
+			}
 			queue.Done()
 			group.Wait()
 			close(items)
