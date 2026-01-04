@@ -16,10 +16,10 @@ import (
 )
 
 type HandlerOptions struct {
-	location           string
-	maxKeys            int
-	presignRedirect    bool
-	presignExpiration  time.Duration
+	location          string
+	maxKeys           int
+	presignRedirect   bool
+	presignExpiration time.Duration
 }
 
 func NewHandlerOptions(options ...HandlerOption) *HandlerOptions {
