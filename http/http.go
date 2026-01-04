@@ -402,3 +402,14 @@ func StripBucketNamePrefix(bucketName string, handler http.Handler) http.Handler
 		handler.ServeHTTP(w, r)
 	})
 }
+
+func BytesRange(start, end int64) string {
+	b := make([]byte, 0, 32)
+	b = append(b, "bytes="...)
+	b = strconv.AppendInt(b, start, 10)
+	b = append(b, '-')
+	if end >= 0 {
+		b = strconv.AppendInt(b, end, 10)
+	}
+	return string(b)
+}
