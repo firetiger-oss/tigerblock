@@ -6,10 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/uri"
+	"github.com/spf13/cobra"
 )
 
 var cpCmd = &cobra.Command{
@@ -163,46 +162,12 @@ func runCp(cmd *cobra.Command, args []string) error {
 func copyFile(cmd *cobra.Command, source, target string, opts cpOptions) (cpResult, error) {
 	ctx := cmd.Context()
 
-	// Get source
-	reader, info, err := storage.GetObject(ctx, source)
-	if err != nil {
-		return cpResult{}, fmt.Errorf("read %s: %w", source, err)
-	}
-	defer reader.Close()
-
-	// Create temp file as intermediary
-	tmpFile, err := os.CreateTemp("", "storage-cp-*")
-	if err != nil {
-		return cpResult{}, fmt.Errorf("create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
-
-	// Copy to temp file
-	if _, err := io.Copy(tmpFile, reader); err != nil {
-		return cpResult{}, fmt.Errorf("copy to temp: %w", err)
-	}
-
-	// Seek back to start
-	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-		return cpResult{}, fmt.Errorf("seek temp file: %w", err)
-	}
-
-	// Build PutOptions
 	putOpts := buildPutOptions(opts)
-
-	// Inherit content-type from source if not overridden
-	if opts.contentType == "" && info.ContentType != "" {
-		putOpts = append(putOpts, storage.ContentType(info.ContentType))
+	if err := storage.CopyObject(ctx, source, target, putOpts...); err != nil {
+		return cpResult{}, fmt.Errorf("copy %s to %s: %w", source, target, err)
 	}
 
-	// Put to target
-	resultInfo, err := storage.PutObject(ctx, target, tmpFile, putOpts...)
-	if err != nil {
-		return cpResult{}, fmt.Errorf("write %s: %w", target, err)
-	}
-
-	return cpResult{Source: normalizeURI(source), Target: normalizeURI(target), Size: resultInfo.Size}, nil
+	return cpResult{Source: normalizeURI(source), Target: normalizeURI(target)}, nil
 }
 
 func buildPutOptions(opts cpOptions) []storage.PutOption {
