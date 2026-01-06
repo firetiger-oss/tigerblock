@@ -428,7 +428,7 @@ func CopyObjectAt(ctx context.Context, registry Registry, sourceURI, destURI str
 		return bucket.CopyObject(ctx, srcKey, dstKey, options...)
 	}
 
-	// Different bucket URIs: load both
+	// Different bucket URIs: load both to check if they resolve to the same backend
 	srcBucketObj, err := registry.LoadBucket(ctx, srcBucketURI)
 	if err != nil {
 		return err
@@ -445,7 +445,15 @@ func CopyObjectAt(ctx context.Context, registry Registry, sourceURI, destURI str
 	}
 
 	// Cross-bucket: streaming fallback
-	return copyObjectStreaming(ctx, srcBucketObj, srcKey, dstBucketObj, dstKey, options...)
+	reader, srcInfo, err := GetObjectAt(ctx, registry, sourceURI)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	mergedOpts := mergePutOptions(srcInfo, options...)
+	_, err = PutObjectAt(ctx, registry, destURI, reader, mergedOpts...)
+	return err
 }
 
 // copyObjectStreaming performs a cross-bucket copy via GetObject -> PutObject.
@@ -456,7 +464,6 @@ func copyObjectStreaming(ctx context.Context, srcBucket Bucket, srcKey string, d
 	}
 	defer reader.Close()
 
-	// Merge source metadata with provided options (options override)
 	mergedOpts := mergePutOptions(srcInfo, options...)
 	_, err = dstBucket.PutObject(ctx, dstKey, reader, mergedOpts...)
 	return err
