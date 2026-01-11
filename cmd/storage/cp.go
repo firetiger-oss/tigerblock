@@ -77,7 +77,7 @@ func runCp(cmd *cobra.Command, args []string) error {
 		if output == "json" {
 			return outputJSON(cmd, []cpResult{{Source: "-", Target: normalizeURI(target), Size: info.Size}})
 		}
-		cmd.Println(normalizeURI(target))
+		cmd.Println(formatURI(target))
 		return nil
 	}
 
@@ -130,7 +130,7 @@ func runCp(cmd *cobra.Command, args []string) error {
 			if output == "json" {
 				results = append(results, result)
 			} else {
-				cmd.Println(result.Target)
+				cmd.Println(formatURI(result.Target))
 			}
 		}
 
@@ -155,7 +155,7 @@ func runCp(cmd *cobra.Command, args []string) error {
 	if output == "json" {
 		return outputJSON(cmd, []cpResult{result})
 	}
-	cmd.Println(normalizeURI(targetURI))
+	cmd.Println(formatURI(targetURI))
 	return nil
 }
 

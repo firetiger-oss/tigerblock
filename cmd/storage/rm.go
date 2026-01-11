@@ -61,7 +61,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 				}
 			}
 			if output == "text" && result.Deleted {
-				cmd.Println(normalizedURI)
+				cmd.Println(formatURI(objectURI))
 			}
 			results = append(results, result)
 		}
@@ -103,7 +103,7 @@ func deleteRecursive(cmd *cobra.Command, prefix string, force bool, output strin
 			}
 		}
 		if output == "text" && result.Deleted {
-			cmd.Println(normalizedKey)
+			cmd.Println(formatURI(key))
 		}
 		results = append(results, result)
 	}
