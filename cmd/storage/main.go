@@ -91,3 +91,12 @@ func normalizeURI(u string) string {
 	scheme, location, path := uri.Split(u)
 	return uri.Join(scheme, location, path)
 }
+
+// formatURI formats a URI for display, stripping file:// prefix for local paths.
+func formatURI(u string) string {
+	scheme, location, path := uri.Split(u)
+	if scheme == "file" {
+		return "/" + path
+	}
+	return uri.Join(scheme, location, path)
+}
