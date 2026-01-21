@@ -773,26 +773,28 @@ func (b *Bucket) PresignGetObject(ctx context.Context, key string, expiration ti
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	// For file:// storage, "presigning" just returns the absolute file path.
+	// There's no authentication to embed, so we return a file:// URL directly.
+	return "file://" + b.path(key), nil
 }
 
 func (b *Bucket) PresignPutObject(ctx context.Context, key string, expiration time.Duration, options ...storage.PutOption) (string, error) {
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	return "file://" + b.path(key), nil
 }
 
 func (b *Bucket) PresignHeadObject(ctx context.Context, key string) (string, error) {
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	return "file://" + b.path(key), nil
 }
 
 func (b *Bucket) PresignDeleteObject(ctx context.Context, key string) (string, error) {
 	if err := storage.ValidObjectKey(key); err != nil {
 		return "", storage.ErrInvalidObjectKey
 	}
-	return "", storage.ErrPresignNotSupported
+	return "file://" + b.path(key), nil
 }
