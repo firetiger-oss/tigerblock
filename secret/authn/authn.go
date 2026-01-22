@@ -6,8 +6,11 @@ import (
 	"encoding"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/firetiger-oss/storage/secret"
 )
@@ -116,8 +119,43 @@ func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler
 				break
 			}
 		}
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeUnauthorizedError(w, r)
 	})
+}
+
+func writeUnauthorizedError(w http.ResponseWriter, r *http.Request) {
+	if isConnectRPC(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"code":"unauthenticated","message":"Request unauthenticated: missing or invalid credentials"}`)
+		return
+	}
+	if isS3Request(r) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `<Error><Code>AccessDenied</Code><Message>Request unauthenticated: missing or invalid credentials</Message><Resource>%s</Resource></Error>`, r.URL.Path)
+		return
+	}
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+}
+
+func isConnectRPC(r *http.Request) bool {
+	if r.Header.Get("Connect-Protocol-Version") != "" {
+		return true
+	}
+	contentType := r.Header.Get("Content-Type")
+	return strings.HasPrefix(contentType, "application/connect+") ||
+		strings.HasPrefix(contentType, "application/grpc")
+}
+
+func isS3Request(r *http.Request) bool {
+	for key := range r.Header {
+		if strings.HasPrefix(key, "X-Amz-") {
+			return true
+		}
+	}
+	auth := r.Header.Get("Authorization")
+	return strings.HasPrefix(auth, "AWS4-HMAC-SHA256") || strings.HasPrefix(auth, "AWS ")
 }
 
 // Unmarshal decodes a secret value into a credential.

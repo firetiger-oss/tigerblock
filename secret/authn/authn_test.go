@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -224,6 +225,185 @@ func TestMarshalUnmarshal(t *testing.T) {
 
 		if string(unmarshaled) != "raw credentials data" {
 			t.Errorf("expected 'raw credentials data', got %q", unmarshaled)
+		}
+	})
+}
+
+func TestIsConnectRPC(t *testing.T) {
+	tests := []struct {
+		name        string
+		headers     map[string]string
+		contentType string
+		want        bool
+	}{
+		{
+			name:    "Connect-Protocol-Version header",
+			headers: map[string]string{"Connect-Protocol-Version": "1"},
+			want:    true,
+		},
+		{
+			name:        "application/connect+json content type",
+			contentType: "application/connect+json",
+			want:        true,
+		},
+		{
+			name:        "application/connect+proto content type",
+			contentType: "application/connect+proto",
+			want:        true,
+		},
+		{
+			name:        "application/grpc content type",
+			contentType: "application/grpc",
+			want:        true,
+		},
+		{
+			name:        "application/grpc-web content type",
+			contentType: "application/grpc-web",
+			want:        true,
+		},
+		{
+			name:        "application/json without Connect header",
+			contentType: "application/json",
+			want:        false,
+		},
+		{
+			name:        "no headers",
+			contentType: "",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+
+			if got := isConnectRPC(req); got != tt.want {
+				t.Errorf("isConnectRPC() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsS3Request(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{
+			name:    "X-Amz-Date header",
+			headers: map[string]string{"X-Amz-Date": "20230101T000000Z"},
+			want:    true,
+		},
+		{
+			name:    "X-Amz-Content-Sha256 header",
+			headers: map[string]string{"X-Amz-Content-Sha256": "abc123"},
+			want:    true,
+		},
+		{
+			name:    "AWS4-HMAC-SHA256 authorization",
+			headers: map[string]string{"Authorization": "AWS4-HMAC-SHA256 Credential=..."},
+			want:    true,
+		},
+		{
+			name:    "AWS authorization (v2)",
+			headers: map[string]string{"Authorization": "AWS accesskey:signature"},
+			want:    true,
+		},
+		{
+			name:    "Bearer authorization",
+			headers: map[string]string{"Authorization": "Bearer token"},
+			want:    false,
+		},
+		{
+			name:    "no AWS headers",
+			headers: map[string]string{"Content-Type": "application/json"},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+
+			if got := isS3Request(req); got != tt.want {
+				t.Errorf("isS3Request() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteUnauthorizedError(t *testing.T) {
+	failingAuth := AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
+		return nil, ErrUnauthorized
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler should not be called")
+	})
+
+	handler := NewHandler(next, failingAuth)
+
+	t.Run("ConnectRPC request returns JSON error", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/package.Service/Method", nil)
+		req.Header.Set("Connect-Protocol-Version", "1")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %q", ct)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"code":"unauthenticated"`) {
+			t.Errorf("expected JSON with unauthenticated code, got %q", body)
+		}
+	})
+
+	t.Run("S3 request returns XML error", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/bucket/key", nil)
+		req.Header.Set("X-Amz-Date", "20230101T000000Z")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/xml" {
+			t.Errorf("expected Content-Type application/xml, got %q", ct)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "<Code>AccessDenied</Code>") {
+			t.Errorf("expected XML with AccessDenied code, got %q", body)
+		}
+	})
+
+	t.Run("plain request returns text error", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/resource", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "Unauthorized") {
+			t.Errorf("expected plain text Unauthorized, got %q", body)
 		}
 	})
 }
