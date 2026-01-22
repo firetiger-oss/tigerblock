@@ -390,7 +390,7 @@ func StripBucketNamePrefix(bucketName string, handler http.Handler) http.Handler
 	prefix := "/" + bucketName
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, prefix) {
-			http.Error(w, "not found", http.StatusNotFound)
+			Error(w, "NoSuchBucket", "The specified bucket does not exist", bucketName, http.StatusNotFound)
 			return
 		}
 

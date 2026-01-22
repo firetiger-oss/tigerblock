@@ -85,7 +85,7 @@ func BucketHandler(b storage.Bucket, options ...HandlerOption) http.Handler {
 		case http.MethodOptions:
 			handleOPTIONS(w, r, b, h)
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			Error(w, "MethodNotAllowed", "The specified method is not allowed against this resource", r.URL.Path, http.StatusMethodNotAllowed)
 		}
 	})
 }
@@ -263,7 +263,7 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		if maxKeys := query.Get("max-keys"); maxKeys != "" {
 			n, err := strconv.Atoi(maxKeys)
 			if err != nil {
-				http.Error(w, "invalid query parameter: max-keys="+maxKeys, http.StatusBadRequest)
+				Error(w, "InvalidArgument", "Invalid value for max-keys: "+maxKeys, "max-keys", http.StatusBadRequest)
 				return
 			}
 			limit = min(limit, max(n, 0))
@@ -423,7 +423,7 @@ func handleCopyObject(w http.ResponseWriter, r *http.Request, b storage.Bucket, 
 	copySource = strings.TrimPrefix(copySource, "/")
 	sourceBucket, sourceKey, ok := strings.Cut(copySource, "/")
 	if !ok {
-		writeS3Error(w, "InvalidArgument", "Invalid x-amz-copy-source header", copySource, http.StatusBadRequest)
+		Error(w, "InvalidArgument", "Invalid x-amz-copy-source header", copySource, http.StatusBadRequest)
 		return
 	}
 	destKey := makeKey(r)
@@ -431,7 +431,7 @@ func handleCopyObject(w http.ResponseWriter, r *http.Request, b storage.Bucket, 
 	// Validate that the source bucket matches this server's bucket
 	_, expectedBucket, _ := uri.Split(h.location)
 	if expectedBucket != "" && sourceBucket != expectedBucket {
-		writeS3Error(w, "AccessDenied", fmt.Sprintf("Cross-bucket copy not supported: source bucket %q does not match %q", sourceBucket, expectedBucket), copySource, http.StatusForbidden)
+		Error(w, "AccessDenied", fmt.Sprintf("Cross-bucket copy not supported: source bucket %q does not match %q", sourceBucket, expectedBucket), copySource, http.StatusForbidden)
 		return
 	}
 
@@ -464,18 +464,18 @@ func handleCopyObject(w http.ResponseWriter, r *http.Request, b storage.Bucket, 
 
 func handlePOST(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *HandlerOptions) {
 	if r.URL.Path != "/" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		Error(w, "MethodNotAllowed", "The specified method is not allowed against this resource", r.URL.Path, http.StatusMethodNotAllowed)
 		return
 	}
 
 	if !r.URL.Query().Has("delete") {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		Error(w, "MethodNotAllowed", "The specified method is not allowed against this resource", r.URL.Path, http.StatusMethodNotAllowed)
 		return
 	}
 
 	keys, quiet, err := parseDeleteObjectsRequest(r.Body)
 	if err != nil {
-		http.Error(w, "Invalid DeleteObjects request: "+err.Error(), http.StatusBadRequest)
+		Error(w, "MalformedXML", "The XML you provided was not well-formed", "", http.StatusBadRequest)
 		return
 	}
 
@@ -497,7 +497,7 @@ func handlePOST(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Han
 	}
 
 	if err := writeDeleteObjectsResult(w, successKeys, errors, quiet); err != nil {
-		http.Error(w, "Error generating response: "+err.Error(), http.StatusInternalServerError)
+		Error(w, "InternalError", "We encountered an internal error. Please try again.", "", http.StatusInternalServerError)
 	}
 }
 
@@ -528,7 +528,7 @@ func handleDELETE(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *H
 			writeError(w, err)
 		}
 	} else {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		Error(w, "MethodNotAllowed", "The specified method is not allowed against this resource", r.URL.Path, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -607,10 +607,11 @@ func writeError(w http.ResponseWriter, err error) {
 	message, resource, _ := strings.Cut(err.Error(), ":")
 	message = strings.TrimSpace(message)
 	resource = strings.TrimSpace(resource)
-	writeS3Error(w, code, message, resource, status)
+	Error(w, code, message, resource, status)
 }
 
-func writeS3Error(w http.ResponseWriter, code, message, resource string, status int) {
+// Error writes an S3-compatible XML error response.
+func Error(w http.ResponseWriter, code, message, resource string, status int) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
 	encoder := xml.NewEncoder(w)
@@ -636,8 +637,14 @@ func mapErrorToS3(err error) (string, int) {
 		return "PreconditionFailed", http.StatusPreconditionFailed
 	case errors.Is(err, storage.ErrBucketExist):
 		return "BucketAlreadyExists", http.StatusConflict
+	case errors.Is(err, storage.ErrBucketNotFound):
+		return "NoSuchBucket", http.StatusNotFound
 	case errors.Is(err, storage.ErrBucketReadOnly):
 		return "AccessDenied", http.StatusForbidden
+	case errors.Is(err, storage.ErrTooManyRequests):
+		return "SlowDown", http.StatusServiceUnavailable
+	case errors.Is(err, storage.ErrPresignNotSupported):
+		return "NotImplemented", http.StatusNotImplemented
 	default:
 		return "InternalError", http.StatusInternalServerError
 	}
@@ -647,9 +654,9 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeS3Error(w, "NoSuchKey", "The specified key does not exist.", filePath, http.StatusNotFound)
+			Error(w, "NoSuchKey", "The specified key does not exist.", filePath, http.StatusNotFound)
 		} else {
-			writeS3Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
+			Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -657,7 +664,7 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 
 	stat, err := f.Stat()
 	if err != nil {
-		writeS3Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
+		Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
 		return
 	}
 
@@ -670,11 +677,11 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 			end = size
 		}
 		if start >= size {
-			writeS3Error(w, "InvalidRange", "The requested range is not satisfiable", filePath, http.StatusRequestedRangeNotSatisfiable)
+			Error(w, "InvalidRange", "The requested range is not satisfiable", filePath, http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
 		if _, err := f.Seek(start, io.SeekStart); err != nil {
-			writeS3Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
+			Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
 			return
 		}
 		setContentLength(header, end-start)

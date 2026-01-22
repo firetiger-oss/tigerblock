@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -259,5 +260,166 @@ func TestBucketHandlerPresignRedirectPresignFails(t *testing.T) {
 	// When presign fails, should return the presign error (mapped to appropriate HTTP status)
 	if rec.Code == http.StatusTemporaryRedirect {
 		t.Error("expected non-redirect status when presign fails")
+	}
+}
+
+func TestError(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		message  string
+		resource string
+		status   int
+	}{
+		{
+			name:     "not found error",
+			code:     "NoSuchKey",
+			message:  "The specified key does not exist",
+			resource: "/path/to/object",
+			status:   http.StatusNotFound,
+		},
+		{
+			name:     "access denied error",
+			code:     "AccessDenied",
+			message:  "Access Denied",
+			resource: "/protected/resource",
+			status:   http.StatusForbidden,
+		},
+		{
+			name:     "method not allowed error",
+			code:     "MethodNotAllowed",
+			message:  "The specified method is not allowed",
+			resource: "/",
+			status:   http.StatusMethodNotAllowed,
+		},
+		{
+			name:     "internal error",
+			code:     "InternalError",
+			message:  "We encountered an internal error",
+			resource: "",
+			status:   http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			Error(rec, tt.code, tt.message, tt.resource, tt.status)
+
+			// Check status code
+			if rec.Code != tt.status {
+				t.Errorf("expected status %d, got %d", tt.status, rec.Code)
+			}
+
+			// Check content type
+			contentType := rec.Header().Get("Content-Type")
+			if contentType != "application/xml" {
+				t.Errorf("expected Content-Type application/xml, got %q", contentType)
+			}
+
+			// Parse and verify XML response
+			var s3Err S3Error
+			if err := xml.Unmarshal(rec.Body.Bytes(), &s3Err); err != nil {
+				t.Fatalf("failed to parse XML response: %v", err)
+			}
+
+			if s3Err.Code != tt.code {
+				t.Errorf("expected Code %q, got %q", tt.code, s3Err.Code)
+			}
+			if s3Err.Message != tt.message {
+				t.Errorf("expected Message %q, got %q", tt.message, s3Err.Message)
+			}
+			if s3Err.Resource != tt.resource {
+				t.Errorf("expected Resource %q, got %q", tt.resource, s3Err.Resource)
+			}
+		})
+	}
+}
+
+func TestMapErrorToS3(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantCode   string
+		wantStatus int
+	}{
+		{
+			name:       "ErrInvalidObjectKey",
+			err:        storage.ErrInvalidObjectKey,
+			wantCode:   "InvalidArgument",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "ErrInvalidObjectTag",
+			err:        storage.ErrInvalidObjectTag,
+			wantCode:   "InvalidTag",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "ErrInvalidRange",
+			err:        storage.ErrInvalidRange,
+			wantCode:   "InvalidRange",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "ErrObjectNotFound",
+			err:        storage.ErrObjectNotFound,
+			wantCode:   "NoSuchKey",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "ErrObjectNotMatch",
+			err:        storage.ErrObjectNotMatch,
+			wantCode:   "PreconditionFailed",
+			wantStatus: http.StatusPreconditionFailed,
+		},
+		{
+			name:       "ErrBucketExist",
+			err:        storage.ErrBucketExist,
+			wantCode:   "BucketAlreadyExists",
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "ErrBucketNotFound",
+			err:        storage.ErrBucketNotFound,
+			wantCode:   "NoSuchBucket",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "ErrBucketReadOnly",
+			err:        storage.ErrBucketReadOnly,
+			wantCode:   "AccessDenied",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "ErrTooManyRequests",
+			err:        storage.ErrTooManyRequests,
+			wantCode:   "SlowDown",
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name:       "ErrPresignNotSupported",
+			err:        storage.ErrPresignNotSupported,
+			wantCode:   "NotImplemented",
+			wantStatus: http.StatusNotImplemented,
+		},
+		{
+			name:       "unknown error",
+			err:        io.EOF,
+			wantCode:   "InternalError",
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, status := mapErrorToS3(tt.err)
+			if code != tt.wantCode {
+				t.Errorf("mapErrorToS3() code = %q, want %q", code, tt.wantCode)
+			}
+			if status != tt.wantStatus {
+				t.Errorf("mapErrorToS3() status = %d, want %d", status, tt.wantStatus)
+			}
+		})
 	}
 }
