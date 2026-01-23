@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/firetiger-oss/storage/secret"
 	gax "github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/status"
 )
 
 // SecretIterator defines the interface for iterating over secrets
@@ -167,6 +169,14 @@ func (m *Manager) GetSecretValue(ctx context.Context, name string, options ...se
 		Name: versionPath,
 	})
 	if err != nil {
+		// Log the raw GCP error before converting to help diagnose issues
+		grpcStatus, _ := status.FromError(err)
+		slog.Error("gcp secret manager: failed to access secret version",
+			"secretName", name,
+			"versionPath", versionPath,
+			"error", err,
+			"grpcCode", grpcStatus.Code(),
+			"grpcMessage", grpcStatus.Message())
 		return nil, "", convertError(err)
 	}
 
