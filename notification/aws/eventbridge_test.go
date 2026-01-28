@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,10 +298,13 @@ func TestS3LambdaHandlerObjectDeleted(t *testing.T) {
 }
 
 func TestS3LambdaHandlerMultipleRecords(t *testing.T) {
+	var mu sync.Mutex
 	var receivedEvents []notification.Event
 
 	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
+		mu.Lock()
 		receivedEvents = append(receivedEvents, *event)
+		mu.Unlock()
 		return nil
 	})
 
@@ -333,11 +337,17 @@ func TestS3LambdaHandlerMultipleRecords(t *testing.T) {
 	if len(receivedEvents) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(receivedEvents))
 	}
-	if receivedEvents[0].Key != "file1.txt" {
-		t.Errorf("expected first key file1.txt, got %s", receivedEvents[0].Key)
+
+	// Events may be processed in any order due to concurrent execution
+	keys := make(map[string]bool)
+	for _, e := range receivedEvents {
+		keys[e.Key] = true
 	}
-	if receivedEvents[1].Key != "file2.txt" {
-		t.Errorf("expected second key file2.txt, got %s", receivedEvents[1].Key)
+	if !keys["file1.txt"] {
+		t.Error("expected file1.txt in received events")
+	}
+	if !keys["file2.txt"] {
+		t.Error("expected file2.txt in received events")
 	}
 }
 

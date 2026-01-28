@@ -213,8 +213,9 @@ func (q *Queue[T]) Done() {
 func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		type item struct {
-			val T
-			err error
+			val   T
+			err   error
+			panic any
 		}
 
 		items := make(chan item)
@@ -230,14 +231,23 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 				defer group.Done()
 
 				for job := range queue.Pull() {
-					job(ctx, func(val T, err error) bool {
-						select {
-						case items <- item{val, err}:
-							return true
-						case <-ctx.Done():
-							return false
-						}
-					})
+					func() {
+						defer recoverAndRethrow(func(v any) {
+							select {
+							case items <- item{panic: v}:
+							case <-ctx.Done():
+							}
+						})
+
+						job(ctx, func(val T, err error) bool {
+							select {
+							case items <- item{val: val, err: err}:
+								return true
+							case <-ctx.Done():
+								return false
+							}
+						})
+					}()
 				}
 			}()
 		}
@@ -250,6 +260,9 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 		}()
 
 		for item := range items {
+			if item.panic != nil {
+				panic(item.panic)
+			}
 			if !yield(item.val, item.err) {
 				return
 			}
