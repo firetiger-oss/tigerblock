@@ -310,11 +310,10 @@ func TestProcessWithContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var count int
+	var count atomic.Int32
 	go func() {
 		for range Process(ctx, q) {
-			count++
-			if count == 1 {
+			if count.Add(1) == 1 {
 				cancel() // Cancel after processing first item
 			}
 		}
@@ -324,7 +323,7 @@ func TestProcessWithContextCancellation(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Should have processed at least one item before cancellation
-	if count == 0 {
+	if count.Load() == 0 {
 		t.Error("expected at least one item to be processed before cancellation")
 	}
 }
@@ -522,6 +521,78 @@ func TestRunTasksEmpty(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error for empty tasks: %v", err)
 	}
+}
+
+func TestProcessPropagatesPanic(t *testing.T) {
+	t.Run("propagates job panic to caller", func(t *testing.T) {
+		q := NewQueueWithCapacity[int](10)
+
+		q.Push(func(ctx context.Context, yield func(int, error) bool) {
+			panic("job panic")
+		})
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate to caller")
+			}
+			if r != "job panic" {
+				t.Errorf("expected panic value 'job panic', got %v", r)
+			}
+		}()
+
+		for range Process(t.Context(), q) {
+		}
+		t.Fatal("should not reach here")
+	})
+
+	t.Run("propagates non-string panic value", func(t *testing.T) {
+		q := NewQueueWithCapacity[int](10)
+
+		q.Push(func(ctx context.Context, yield func(int, error) bool) {
+			panic(42)
+		})
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate")
+			}
+			if r != 42 {
+				t.Errorf("expected panic value 42, got %v", r)
+			}
+		}()
+
+		for range Process(t.Context(), q) {
+		}
+		t.Fatal("should not reach here")
+	})
+}
+
+func TestRunTasksPropagatesPanic(t *testing.T) {
+	t.Run("propagates task panic to caller", func(t *testing.T) {
+		tasks := []int{1, 2, 3}
+
+		process := func(ctx context.Context, value int) error {
+			if value == 2 {
+				panic("task panic")
+			}
+			return nil
+		}
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate to caller")
+			}
+			if r != "task panic" {
+				t.Errorf("expected panic value 'task panic', got %v", r)
+			}
+		}()
+
+		_ = RunTasks(t.Context(), tasks, process)
+		t.Fatal("should not reach here")
+	})
 }
 
 func TestJobType(t *testing.T) {

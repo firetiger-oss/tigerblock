@@ -39,8 +39,9 @@ func Pipeline[Out, In any](
 ) iter.Seq2[Out, error] {
 	return func(yield func(Out, error) bool) {
 		type result struct {
-			out Out
-			err error
+			out   Out
+			err   error
+			panic any
 		}
 
 		type promise chan result
@@ -73,6 +74,9 @@ func Pipeline[Out, In any](
 				go func() {
 					defer waitGroup.Done()
 					defer func() { <-semaphore }()
+					defer recoverAndRethrow(func(v any) {
+						resolve <- result{panic: v}
+					})
 
 					out, err := transform(ctx, in)
 					resolve <- result{out: out, err: err}
@@ -88,6 +92,9 @@ func Pipeline[Out, In any](
 
 		for p := range promises {
 			r := <-p
+			if r.panic != nil {
+				panic(r.panic)
+			}
 			if !yield(r.out, r.err) {
 				return
 			}

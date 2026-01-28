@@ -212,6 +212,86 @@ func TestPipeline(t *testing.T) {
 			t.Fatalf("expected max concurrency of 3, got %d", max)
 		}
 	})
+
+	t.Run("propagates transform panic to caller", func(t *testing.T) {
+		ctx := t.Context()
+
+		seq := func(yield func(int, error) bool) {
+			yield(1, nil)
+		}
+
+		transform := func(ctx context.Context, in int) (int, error) {
+			panic("transform panic")
+		}
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate to caller")
+			}
+			if r != "transform panic" {
+				t.Errorf("expected panic value 'transform panic', got %v", r)
+			}
+		}()
+
+		for range concurrent.Pipeline(ctx, seq, transform) {
+		}
+		t.Fatal("should not reach here")
+	})
+
+	t.Run("panic on first item propagates", func(t *testing.T) {
+		ctx := t.Context()
+
+		seq := func(yield func(int, error) bool) {
+			yield(1, nil)
+			yield(2, nil)
+		}
+
+		transform := func(ctx context.Context, in int) (int, error) {
+			if in == 1 {
+				panic("first item panic")
+			}
+			return in, nil
+		}
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate")
+			}
+		}()
+
+		for range concurrent.Pipeline(ctx, seq, transform) {
+		}
+		t.Fatal("should not reach here")
+	})
+
+	t.Run("panic with non-string value", func(t *testing.T) {
+		ctx := t.Context()
+
+		seq := func(yield func(int, error) bool) {
+			yield(1, nil)
+		}
+
+		transform := func(ctx context.Context, in int) (int, error) {
+			panic(42)
+		}
+
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic to propagate")
+			}
+			// Panic value is passed through directly
+			if r != 42 {
+				t.Errorf("expected panic value 42, got %v", r)
+			}
+		}()
+
+		for range concurrent.Pipeline(ctx, seq, transform) {
+		}
+		t.Fatal("should not reach here")
+	})
 }
 
 func TestExec(t *testing.T) {
