@@ -21,75 +21,112 @@ import (
 	"github.com/firetiger-oss/storage/cache/lru"
 )
 
+type rangeKey struct {
+	filePath string
+	start    int64
+	end      int64
+}
+
+type rangeInfo struct {
+	diskUsage int64
+}
+
 type Cache struct {
 	tmpdir string
 	size   int64
 	init   bool
 	once   sync.Once
 	mutex  sync.Mutex
-	items  lru.LRU[string, struct{}]
+	items  lru.LRU[rangeKey, rangeInfo]
+	files  map[string]map[rangeKey]struct{} // secondary index for efficient file-level deletion
 }
 
 func NewCache(tmpdir string, size int64) *Cache {
 	return &Cache{tmpdir: tmpdir, size: size}
 }
 
-// shouldCacheObject determines if an object should be cached based on its cache control headers
 func shouldCacheObject(info storage.ObjectInfo) bool {
-	// If there is no cache control, do not cache the object
 	if info.CacheControl == "" {
 		return false
 	}
-
-	// Parse the cache control header
 	cc := cacheheader.ParseString(info.CacheControl)
-
-	// Do not cache objects that are private
-	if cc.Private {
+	if cc.Private || cc.NoStore {
 		return false
 	}
-
-	// Do not cache objects that have no-store (but allow no-cache and must-revalidate for revalidation)
-	if cc.NoStore {
-		return false
-	}
-
-	// Cache if there's a max age, immutable, or needs revalidation (no-cache/must-revalidate)
 	return cc.MaxAge > 0 || cc.Immutable || cc.NoCache || cc.MustRevalidate
 }
 
-// isObjectExpired checks if a cached object has expired based on its cache control and file modification time
 func isObjectExpired(info storage.ObjectInfo, fileInfo os.FileInfo) bool {
-	// If there's no cache control, consider it expired
 	if info.CacheControl == "" {
 		return true
 	}
-
 	cc := cacheheader.ParseString(info.CacheControl)
-
-	// If object is immutable, it never expires
 	if cc.Immutable {
 		return false
 	}
-
-	// If there's no max age, cannot expire
 	if cc.MaxAge <= 0 {
 		return false
 	}
-
-	// Check if the object has exceeded its max age based on file creation time
 	age := time.Since(fileInfo.ModTime())
 	maxAge := time.Duration(cc.MaxAge) * time.Second
 	return age > maxAge
 }
 
-// needsRevalidation checks if a cached object needs to be revalidated with the backend
 func needsRevalidation(info storage.ObjectInfo) bool {
 	if info.CacheControl == "" {
 		return false
 	}
 	cc := cacheheader.ParseString(info.CacheControl)
 	return cc.NoCache || cc.MustRevalidate
+}
+
+func blockAlign(start, end int64) (alignedStart, alignedEnd int64) {
+	alignedStart = (start / sparseBlockSize) * sparseBlockSize
+	alignedEnd = ((end + sparseBlockSize) / sparseBlockSize) * sparseBlockSize
+	return
+}
+
+func isRangeCached(f *os.File, start, end int64) (bool, error) {
+	pos := start
+	for pos <= end {
+		dataStart, err := seekData(f, pos)
+		if err != nil {
+			return false, nil
+		}
+		if dataStart > pos {
+			return false, nil
+		}
+		holeStart, err := seekHole(f, dataStart)
+		if err != nil {
+			return true, nil
+		}
+		if holeStart > end {
+			return true, nil
+		}
+		pos = holeStart
+	}
+	return true, nil
+}
+
+func uncachedRanges(f *os.File, start, end int64) ([]struct{ Start, End int64 }, error) {
+	var uncached []struct{ Start, End int64 }
+	pos := start
+	for pos <= end {
+		holeStart, err := seekHole(f, pos)
+		if err != nil || holeStart >= end {
+			break
+		}
+		dataStart, err := seekData(f, holeStart)
+		if err != nil {
+			dataStart = end + 1
+		}
+		holeEnd := min(dataStart-1, end)
+		if holeStart < holeEnd {
+			uncached = append(uncached, struct{ Start, End int64 }{holeStart, holeEnd})
+		}
+		pos = dataStart
+	}
+	return uncached, nil
 }
 
 func (c *Cache) Stat() storage.CacheStat {
@@ -110,12 +147,22 @@ func (c *Cache) AdaptBucket(bucket storage.Bucket) storage.Bucket {
 			return
 		}
 
-		filepath.Walk(c.tmpdir, func(path string, info os.FileInfo, err error) error {
+		filepath.Walk(c.tmpdir, func(path string, fileInfo os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			if !info.IsDir() {
-				c.insert(path, info.Size())
+			if !fileInfo.IsDir() {
+				f, err := os.Open(path)
+				if err != nil {
+					return nil
+				}
+				usage, err := diskUsage(f)
+				f.Close()
+				logicalSize := fileInfo.Size()
+				if err != nil || usage == 0 || usage > logicalSize {
+					usage = logicalSize
+				}
+				c.insertFile(path, logicalSize, usage)
 			}
 			return nil
 		})
@@ -135,38 +182,100 @@ func (c *Cache) AdaptBucket(bucket storage.Bucket) storage.Bucket {
 	}
 }
 
-func (c *Cache) delete(path string) {
-	c.mutex.Lock()
-	c.items.Delete(path)
-	c.mutex.Unlock()
+// must be called with mutex held
+func (c *Cache) removeFromSecondaryIndex(key rangeKey) bool {
+	if ranges, ok := c.files[key.filePath]; ok {
+		delete(ranges, key)
+		if len(ranges) == 0 {
+			delete(c.files, key.filePath)
+			return true
+		}
+	}
+	return false
 }
 
-func (c *Cache) lookup(path string) {
+func (c *Cache) deleteFile(filePath string) {
 	c.mutex.Lock()
-	c.items.Lookup(path) // just touch it to update the LRU data structure
+	ranges := c.files[filePath]
+	if ranges != nil {
+		for key := range ranges {
+			c.items.Delete(key)
+		}
+		delete(c.files, filePath)
+	}
 	c.mutex.Unlock()
+
+	os.Remove(filePath)
 }
 
-func (c *Cache) insert(path string, size int64) {
-	var evictedPaths []string
+func (c *Cache) lookupFile(filePath string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if ranges, ok := c.files[filePath]; ok {
+		for key := range ranges {
+			c.items.Lookup(key)
+		}
+	}
+}
+
+func (c *Cache) insertFile(filePath string, size int64, usage int64) {
+	key := rangeKey{filePath: filePath, start: 0, end: size}
+	c.insertRange(key, usage)
+}
+
+func (c *Cache) insertRange(key rangeKey, usage int64) {
+	var evictedRanges []rangeKey
 
 	defer func() {
-		for _, evictedPath := range evictedPaths {
-			os.Remove(evictedPath)
+		// outside the lock
+		for _, evictedKey := range evictedRanges {
+			c.punchEvictedRange(evictedKey)
 		}
 	}()
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.items.Insert(path, struct{}{}, size) {
+	if c.files == nil {
+		c.files = make(map[string]map[rangeKey]struct{})
+	}
+
+	if c.items.Insert(key, rangeInfo{diskUsage: usage}, usage) {
+		if c.files[key.filePath] == nil {
+			c.files[key.filePath] = make(map[rangeKey]struct{})
+		}
+		c.files[key.filePath][key] = struct{}{}
+
 		for c.items.Size > c.size {
-			evictedPath, _, _, hasEvicted := c.items.Evict()
+			evictedKey, _, _, hasEvicted := c.items.Evict()
 			if !hasEvicted {
 				break
 			}
-			evictedPaths = append(evictedPaths, evictedPath)
+			evictedRanges = append(evictedRanges, evictedKey)
+			c.removeFromSecondaryIndex(evictedKey)
 		}
+	}
+}
+
+func (c *Cache) punchEvictedRange(key rangeKey) {
+	f, err := os.OpenFile(key.filePath, os.O_RDWR, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	length := key.end - key.start
+	if err := punchHole(f, key.start, length); err != nil {
+		return
+	}
+
+	c.mutex.Lock()
+	isEmpty := len(c.files[key.filePath]) == 0
+	c.mutex.Unlock()
+
+	if isEmpty {
+		os.Remove(key.filePath)
 	}
 }
 
@@ -201,14 +310,11 @@ func (b *cachedBucket) HeadObject(ctx context.Context, key string) (storage.Obje
 	if err == nil {
 		defer f.Close()
 		if info, err := readObjectInfo(f); err == nil {
-			// Check if the cached object has expired
 			if fileInfo, err := f.Stat(); err == nil && !isObjectExpired(info, fileInfo) {
-				b.lookup(f.Name())
+				b.lookupFile(f.Name())
 				return info, nil
 			} else {
-				// Object has expired, remove it from cache
-				b.delete(filePath)
-				os.Remove(filePath)
+				b.deleteFile(filePath)
 			}
 		}
 	}
@@ -266,23 +372,32 @@ func (b *cachedBucket) GetObject(ctx context.Context, key string, options ...sto
 		goto headObject
 	}
 
-	// Check if the cached object has expired
 	cachedFileInfo, err = cachedFile.Stat()
 	if err != nil || isObjectExpired(cachedInfo, cachedFileInfo) {
-		// Object has expired, remove it from cache
-		b.delete(filePath)
-		os.Remove(filePath)
+		b.deleteFile(filePath)
 		goto headObject
 	}
 
-	// Check if the cached object needs revalidation
 	valid = !needsRevalidation(cachedInfo)
 	if !valid {
-		// If backend is unreachable or object didn't change, serve from cache
 		headInfo, err = b.bucket.HeadObject(ctx, key)
 		valid = err != nil || headInfo.ETag == cachedInfo.ETag
 		if !valid {
-			goto getObject // we already have the file info
+			cachedFile.Close()
+			cachedFile = nil
+			b.deleteFile(filePath)
+			goto getObject
+		}
+	}
+
+	if hasBytesRange {
+		objectSize := cachedFileInfo.Size()
+		alignedStart, alignedEnd := blockAlign(start, min(end, objectSize-1))
+		cached, _ := isRangeCached(cachedFile, alignedStart, min(alignedEnd, objectSize))
+		if !cached {
+			cachedFile.Close()
+			cachedFile = nil
+			goto fetchRange
 		}
 	}
 
@@ -294,8 +409,11 @@ func (b *cachedBucket) GetObject(ctx context.Context, key string, options ...sto
 	if hasBytesRange {
 		body = bytesRangeReadCloser(cachedFile, start, end)
 	}
-	b.lookup(cachedFile.Name())
+	b.lookupFile(cachedFile.Name())
 	return body, cachedInfo, nil
+
+fetchRange:
+	return b.fetchRangeToCache(ctx, key, filePath, start, end, cachedInfo)
 
 headObject:
 	headInfo, err = b.bucket.HeadObject(ctx, key)
@@ -306,7 +424,76 @@ headObject:
 		return b.bucket.GetObject(ctx, key, options...)
 	}
 getObject:
+	if hasBytesRange {
+		return b.fetchRangeToCache(ctx, key, filePath, start, end, headInfo)
+	}
 	return b.getObjectFromBucket(ctx, key, filePath, start, end, hasBytesRange)
+}
+
+func (b *cachedBucket) fetchRangeToCache(ctx context.Context, key, filePath string, start, end int64, info storage.ObjectInfo) (io.ReadCloser, storage.ObjectInfo, error) {
+	objectSize := info.Size
+	alignedStart, alignedEnd := blockAlign(start, min(end, objectSize-1))
+	if alignedEnd > objectSize {
+		alignedEnd = objectSize
+	}
+
+	dirPath := filepath.Dir(filePath)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return b.bucket.GetObject(ctx, key, storage.BytesRange(start, end))
+	}
+
+	f, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	if err != nil {
+		f, err = os.Create(filePath)
+		if err != nil {
+			return b.bucket.GetObject(ctx, key, storage.BytesRange(start, end))
+		}
+		if err := f.Truncate(objectSize); err != nil {
+			f.Close()
+			os.Remove(filePath)
+			return b.bucket.GetObject(ctx, key, storage.BytesRange(start, end))
+		}
+		if err := writeObjectInfo(f, info); err != nil {
+			f.Close()
+			os.Remove(filePath)
+			return b.bucket.GetObject(ctx, key, storage.BytesRange(start, end))
+		}
+	}
+
+	closeFile := true
+	defer func() {
+		if closeFile {
+			f.Close()
+		}
+	}()
+
+	uncached, err := uncachedRanges(f, alignedStart, alignedEnd)
+	if err != nil {
+		return b.bucket.GetObject(ctx, key, storage.BytesRange(start, end))
+	}
+
+	for _, r := range uncached {
+		rangeEnd := min(r.End, objectSize-1)
+		body, _, err := b.bucket.GetObject(ctx, key, storage.BytesRange(r.Start, rangeEnd))
+		if err != nil {
+			return nil, info, err
+		}
+		data, err := io.ReadAll(body)
+		body.Close()
+		if err != nil {
+			return nil, info, err
+		}
+		if _, err := f.WriteAt(data, r.Start); err != nil {
+			return nil, info, err
+		}
+		rangeUsage := int64(len(data))
+		rKey := rangeKey{filePath: filePath, start: r.Start, end: rangeEnd + 1}
+		b.insertRange(rKey, rangeUsage)
+	}
+
+	f.Sync()
+	closeFile = false
+	return bytesRangeReadCloser(f, start, end), info, nil
 }
 
 func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath string, start, end int64, hasBytesRange bool) (io.ReadCloser, storage.ObjectInfo, error) {
@@ -368,7 +555,12 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		body = bytesRangeReadCloser(f, start, end)
 	}
 
-	b.lookup(f.Name())
+	f.Sync()
+	usage, err := diskUsage(f)
+	if err != nil || usage == 0 || usage > info.Size {
+		usage = info.Size
+	}
+	b.insertFile(filePath, info.Size, usage)
 	closeFile = false
 	return body, info, nil
 }
@@ -414,7 +606,6 @@ func (b *cachedBucket) PutObject(ctx context.Context, key string, value io.Reade
 		return info, err
 	}
 
-	// Only cache the object if it should be cached based on cache control headers
 	if tmpFile != nil && shouldCacheObject(info) {
 		if err := os.Chtimes(tmpFile.Name(), info.LastModified, info.LastModified); err != nil {
 			return info, nil
@@ -422,7 +613,12 @@ func (b *cachedBucket) PutObject(ctx context.Context, key string, value io.Reade
 		if err := writeObjectInfo(tmpFile, info); err != nil {
 			return info, nil
 		}
-		b.insert(filePath, info.Size)
+		tmpFile.Sync()
+		usage, err := diskUsage(tmpFile)
+		if err != nil || usage == 0 || usage > info.Size {
+			usage = info.Size
+		}
+		b.insertFile(filePath, info.Size, usage)
 		renameFile = true
 	}
 	return info, err
@@ -436,8 +632,7 @@ func (b *cachedBucket) DeleteObject(ctx context.Context, key string) error {
 		return err
 	}
 	filePath := b.makeFilePath(key)
-	b.delete(filePath)
-	os.Remove(filePath)
+	b.deleteFile(filePath)
 	return b.bucket.DeleteObject(ctx, key)
 }
 
@@ -448,8 +643,7 @@ func (b *cachedBucket) DeleteObjects(ctx context.Context, objects iter.Seq2[stri
 
 			if err == nil {
 				filePath := b.makeFilePath(key)
-				b.delete(filePath)
-				os.Remove(filePath)
+				b.deleteFile(filePath)
 			}
 
 			if !yield(key, err) {
@@ -460,10 +654,7 @@ func (b *cachedBucket) DeleteObjects(ctx context.Context, objects iter.Seq2[stri
 }
 
 func (b *cachedBucket) CopyObject(ctx context.Context, from, to string, options ...storage.PutOption) error {
-	// Invalidate destination cache entry
-	filePath := b.makeFilePath(to)
-	b.delete(filePath)
-	os.Remove(filePath)
+	b.deleteFile(b.makeFilePath(to))
 	return b.bucket.CopyObject(ctx, from, to, options...)
 }
 

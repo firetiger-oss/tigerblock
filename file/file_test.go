@@ -13,6 +13,7 @@ import (
 )
 
 func TestFileStorage(t *testing.T) {
+	t.Parallel()
 	storagetest.TestStorage(t, func(t *testing.T) (storage.Bucket, error) {
 		root := filepath.Join(t.TempDir(), "bucket")
 		return file.NewRegistry(root).LoadBucket(t.Context(), "")
@@ -20,6 +21,7 @@ func TestFileStorage(t *testing.T) {
 }
 
 func TestLoadFileBucketLocation(t *testing.T) {
+	t.Parallel()
 	bucket, err := storage.LoadBucket(t.Context(), "file:///mnt/storage")
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +33,7 @@ func TestLoadFileBucketLocation(t *testing.T) {
 }
 
 func TestFileStoragePutObjectContent(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "bucket")
 	bucket, err := file.NewRegistry(root).LoadBucket(t.Context(), "")
 	if err != nil {
