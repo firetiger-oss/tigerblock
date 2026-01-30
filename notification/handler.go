@@ -210,6 +210,8 @@ func schemeFromSource(source string) string {
 		return "s3"
 	case "gcp:storage":
 		return "gs"
+	case "cloudflare:r2":
+		return "r2"
 	default:
 		// Default to s3 for backwards compatibility
 		return "s3"
