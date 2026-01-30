@@ -26,9 +26,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"time"
 
+	"github.com/firetiger-oss/storage/concurrent"
 	"github.com/firetiger-oss/storage/notification"
 )
 
@@ -159,6 +161,9 @@ func NewQueuesHandler(objectHandler notification.ObjectHandler) http.Handler {
 //
 // This is useful when the Worker forwards multiple events in a single request
 // to reduce HTTP overhead. The expected request body is an array of R2Event objects.
+//
+// Events are processed concurrently using the context's concurrency limit.
+// Use concurrent.WithLimit to control parallelism.
 func NewBatchQueuesHandler(objectHandler notification.ObjectHandler) http.Handler {
 	handler := NewR2EventHandler(objectHandler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -167,23 +172,51 @@ func NewBatchQueuesHandler(objectHandler notification.ObjectHandler) http.Handle
 			return
 		}
 
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "failed to read request body", http.StatusBadRequest)
-			return
-		}
+		events := decodeEventArray(json.NewDecoder(r.Body))
 
-		var events []R2Event
-		if err := json.Unmarshal(body, &events); err != nil {
-			http.Error(w, "failed to parse events: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		for _, event := range events {
-			if err := handler.Handle(r.Context(), event); err != nil {
+		for _, err := range concurrent.Pipeline(r.Context(), events,
+			func(ctx context.Context, event R2Event) (struct{}, error) {
+				return struct{}{}, handler.Handle(ctx, event)
+			},
+		) {
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
 	})
+}
+
+// decodeEventArray streams R2Event objects from a JSON array using a decoder.
+func decodeEventArray(dec *json.Decoder) iter.Seq2[R2Event, error] {
+	return func(yield func(R2Event, error) bool) {
+		// Read opening bracket
+		token, err := dec.Token()
+		if err != nil {
+			yield(R2Event{}, fmt.Errorf("failed to read opening bracket: %w", err))
+			return
+		}
+		if delim, ok := token.(json.Delim); !ok || delim != '[' {
+			yield(R2Event{}, fmt.Errorf("expected '[', got %v", token))
+			return
+		}
+
+		// Stream each event
+		for dec.More() {
+			var event R2Event
+			if err := dec.Decode(&event); err != nil {
+				yield(R2Event{}, fmt.Errorf("failed to decode event: %w", err))
+				return
+			}
+			if !yield(event, nil) {
+				return
+			}
+		}
+
+		// Read closing bracket
+		if _, err := dec.Token(); err != nil {
+			yield(R2Event{}, fmt.Errorf("failed to read closing bracket: %w", err))
+			return
+		}
+	}
 }

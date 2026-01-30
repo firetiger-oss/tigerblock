@@ -105,6 +105,63 @@ func TestRegistryMissingAccountID(t *testing.T) {
 	}
 }
 
+func TestWithAccountID(t *testing.T) {
+	// Save and restore environment
+	origCF := os.Getenv("CF_ACCOUNT_ID")
+	origCloudflare := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
+	defer func() {
+		os.Setenv("CF_ACCOUNT_ID", origCF)
+		os.Setenv("CLOUDFLARE_ACCOUNT_ID", origCloudflare)
+	}()
+
+	// Unset environment variables to ensure the option is used
+	os.Unsetenv("CF_ACCOUNT_ID")
+	os.Unsetenv("CLOUDFLARE_ACCOUNT_ID")
+
+	// Create registry with programmatic account ID
+	registry := NewRegistry(WithAccountID("programmatic-account-id"))
+	bucket, err := registry.LoadBucket(context.Background(), "test-bucket")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Verify the bucket was created successfully
+	if bucket == nil {
+		t.Fatal("expected bucket to be created")
+	}
+
+	// Verify the location has the correct scheme
+	if bucket.Location() != "r2://test-bucket" {
+		t.Errorf("expected r2://test-bucket, got %s", bucket.Location())
+	}
+}
+
+func TestWithAccountIDOverridesEnv(t *testing.T) {
+	// Save and restore environment
+	origCF := os.Getenv("CF_ACCOUNT_ID")
+	origCloudflare := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
+	defer func() {
+		os.Setenv("CF_ACCOUNT_ID", origCF)
+		os.Setenv("CLOUDFLARE_ACCOUNT_ID", origCloudflare)
+	}()
+
+	// Set environment variable
+	os.Setenv("CF_ACCOUNT_ID", "env-account-id")
+	os.Unsetenv("CLOUDFLARE_ACCOUNT_ID")
+
+	// Create registry with programmatic account ID - should override env
+	registry := NewRegistry(WithAccountID("programmatic-account-id"))
+	bucket, err := registry.LoadBucket(context.Background(), "test-bucket")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Verify the bucket was created successfully
+	if bucket == nil {
+		t.Fatal("expected bucket to be created")
+	}
+}
+
 func TestRegistration(t *testing.T) {
 	// Verify that the r2 scheme is registered
 	// Save and restore environment

@@ -2,10 +2,13 @@ package sigv4
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -304,6 +307,187 @@ func TestCredentialCaching(t *testing.T) {
 	if callCount != 1 {
 		t.Errorf("expected credentials to be retrieved once, got %d", callCount)
 	}
+}
+
+func TestNewSigner(t *testing.T) {
+	t.Run("generates presigned URL with required parameters", func(t *testing.T) {
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(mockCredentialsProvider{creds: testCredentials()}),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(15 * time.Minute)
+
+		signedURL, err := signer.Sign(context.Background(), "GET", u, expiration)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsedURL, err := url.Parse(signedURL)
+		if err != nil {
+			t.Fatalf("failed to parse signed URL: %v", err)
+		}
+
+		q := parsedURL.Query()
+
+		// Check required SigV4 query parameters
+		if q.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" {
+			t.Errorf("expected X-Amz-Algorithm=AWS4-HMAC-SHA256, got %q", q.Get("X-Amz-Algorithm"))
+		}
+
+		if q.Get("X-Amz-Credential") == "" {
+			t.Error("expected X-Amz-Credential to be set")
+		}
+
+		if q.Get("X-Amz-Date") == "" {
+			t.Error("expected X-Amz-Date to be set")
+		}
+
+		if q.Get("X-Amz-Expires") == "" {
+			t.Error("expected X-Amz-Expires to be set")
+		}
+
+		if q.Get("X-Amz-Signature") == "" {
+			t.Error("expected X-Amz-Signature to be set")
+		}
+
+		if q.Get("X-Amz-SignedHeaders") == "" {
+			t.Error("expected X-Amz-SignedHeaders to be set")
+		}
+	})
+
+	t.Run("includes security token when credentials have session token", func(t *testing.T) {
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(mockCredentialsProvider{creds: testCredentials()}),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(15 * time.Minute)
+
+		signedURL, err := signer.Sign(context.Background(), "GET", u, expiration)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsedURL, _ := url.Parse(signedURL)
+		q := parsedURL.Query()
+
+		if q.Get("X-Amz-Security-Token") != "session-token" {
+			t.Errorf("expected X-Amz-Security-Token=session-token, got %q", q.Get("X-Amz-Security-Token"))
+		}
+	})
+
+	t.Run("omits security token when DisableSessionToken is true", func(t *testing.T) {
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(mockCredentialsProvider{creds: testCredentials()}),
+			WithDisableSessionToken(true),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(15 * time.Minute)
+
+		signedURL, err := signer.Sign(context.Background(), "GET", u, expiration)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsedURL, _ := url.Parse(signedURL)
+		q := parsedURL.Query()
+
+		if q.Get("X-Amz-Security-Token") != "" {
+			t.Error("expected no X-Amz-Security-Token when disabled")
+		}
+	})
+
+	t.Run("sets correct expiration duration", func(t *testing.T) {
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(mockCredentialsProvider{creds: testCredentials()}),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(1 * time.Hour)
+
+		signedURL, err := signer.Sign(context.Background(), "GET", u, expiration)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsedURL, _ := url.Parse(signedURL)
+		q := parsedURL.Query()
+
+		expires := q.Get("X-Amz-Expires")
+		// Should be approximately 3600 seconds (within 5 second tolerance)
+		var expiresInt int
+		fmt.Sscanf(expires, "%d", &expiresInt)
+		if expiresInt < 3595 || expiresInt > 3605 {
+			t.Errorf("expected X-Amz-Expires ~3600, got %d", expiresInt)
+		}
+	})
+
+	t.Run("works with PUT method", func(t *testing.T) {
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(mockCredentialsProvider{creds: testCredentials()}),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(15 * time.Minute)
+
+		signedURL, err := signer.Sign(context.Background(), "PUT", u, expiration)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		parsedURL, _ := url.Parse(signedURL)
+		q := parsedURL.Query()
+
+		if q.Get("X-Amz-Signature") == "" {
+			t.Error("expected X-Amz-Signature to be set for PUT request")
+		}
+	})
+
+	t.Run("caches credentials across multiple Sign calls", func(t *testing.T) {
+		callCount := 0
+		provider := mockCredentialsProvider{
+			creds: testCredentials(),
+		}
+
+		countingProvider := aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			callCount++
+			return provider.Retrieve(ctx)
+		})
+
+		signer := NewSigner(
+			WithService("s3"),
+			WithRegion("us-east-1"),
+			WithCredentials(countingProvider),
+		)
+
+		u, _ := url.Parse("https://my-bucket.s3.us-east-1.amazonaws.com/test-key")
+		expiration := time.Now().Add(15 * time.Minute)
+
+		// Make multiple Sign calls
+		for i := 0; i < 5; i++ {
+			_, err := signer.Sign(context.Background(), "GET", u, expiration)
+			if err != nil {
+				t.Fatalf("request %d: unexpected error: %v", i, err)
+			}
+		}
+
+		// Credentials should only be retrieved once due to caching
+		if callCount != 1 {
+			t.Errorf("expected credentials to be retrieved once, got %d", callCount)
+		}
+	})
 }
 
 func TestParseEndpoint(t *testing.T) {

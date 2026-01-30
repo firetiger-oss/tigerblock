@@ -1,7 +1,7 @@
 // Package r2 provides a Cloudflare R2 storage backend.
 //
-// R2 is S3-compatible, so this package wraps the S3 backend with
-// R2-specific endpoint configuration.
+// R2 is S3-compatible, so this package uses the HTTP backend with
+// SigV4 authentication for both request signing and presigned URLs.
 //
 // Usage:
 //
@@ -21,15 +21,13 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"net/http"
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/firetiger-oss/storage"
-	"github.com/firetiger-oss/storage/cache"
-	s3pkg "github.com/firetiger-oss/storage/s3"
+	storagehttp "github.com/firetiger-oss/storage/http"
+	"github.com/firetiger-oss/storage/secret/authn/sigv4"
 	"github.com/firetiger-oss/storage/uri"
 )
 
@@ -38,8 +36,24 @@ func init() {
 }
 
 // ErrMissingAccountID is returned when neither CF_ACCOUNT_ID nor
-// CLOUDFLARE_ACCOUNT_ID environment variable is set.
+// CLOUDFLARE_ACCOUNT_ID environment variable is set, and no account ID
+// was provided via WithAccountID.
 var ErrMissingAccountID = errors.New("r2: CF_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID environment variable required")
+
+// Option configures the R2 registry.
+type Option func(*config)
+
+type config struct {
+	accountID string
+}
+
+// WithAccountID sets the Cloudflare account ID programmatically.
+// If not set, falls back to CF_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID env vars.
+func WithAccountID(id string) Option {
+	return func(c *config) {
+		c.accountID = id
+	}
+}
 
 // NewRegistry creates a storage registry for Cloudflare R2 buckets.
 //
@@ -47,43 +61,43 @@ var ErrMissingAccountID = errors.New("r2: CF_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID
 //   - CF_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID: Cloudflare account ID (required)
 //   - AWS_ACCESS_KEY_ID: R2 API token access key
 //   - AWS_SECRET_ACCESS_KEY: R2 API token secret key
-//   - AWS_REGION: ignored, R2 uses "auto"
-func NewRegistry(options ...func(*s3.Options)) storage.Registry {
-	var cachedClient cache.Value[*s3.Client]
+//
+// Alternatively, use WithAccountID to set the account ID programmatically.
+func NewRegistry(options ...Option) storage.Registry {
+	var cfg config
+	for _, opt := range options {
+		opt(&cfg)
+	}
+
 	return storage.RegistryFunc(func(ctx context.Context, bucket string) (storage.Bucket, error) {
-		accountID := getAccountID()
+		accountID := cfg.accountID
+		if accountID == "" {
+			accountID = getAccountID()
+		}
 		if accountID == "" {
 			return nil, ErrMissingAccountID
 		}
 
-		client, err := cachedClient.Load(func() (*s3.Client, error) {
-			cfg, err := config.LoadDefaultConfig(ctx,
-				// R2 requires "auto" region, but we use us-east-1 as the SDK alias
-				config.WithRegion("auto"),
-			)
-			if err != nil {
-				return nil, err
-			}
+		endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com/%s", accountID, bucket)
 
-			endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", accountID)
+		// Create SigV4 transport for request signing
+		// R2 uses "s3" service and "auto" region for signing
+		transport := sigv4.NewTransport(http.DefaultTransport,
+			sigv4.WithService("s3"),
+			sigv4.WithRegion("auto"),
+		)
 
-			defaultOptions := []func(*s3.Options){
-				func(o *s3.Options) {
-					o.BaseEndpoint = aws.String(endpoint)
-					o.UsePathStyle = true
-					// R2 requires us-east-1 for signing
-					o.Region = "auto"
-				},
-			}
-
-			return s3.NewFromConfig(cfg, append(defaultOptions, options...)...), nil
-		})
-		if err != nil {
-			return nil, err
-		}
+		// Create SigV4 signer for presigned URLs
+		signer := sigv4.NewSigner(
+			sigv4.WithService("s3"),
+			sigv4.WithRegion("auto"),
+		)
 
 		return &Bucket{
-			inner:      s3pkg.NewBucket(client, bucket),
+			inner: storagehttp.NewBucket(endpoint,
+				storagehttp.WithClient(&http.Client{Transport: transport}),
+				storagehttp.WithSigner(signer),
+			),
 			bucketName: bucket,
 		}, nil
 	})
@@ -97,9 +111,9 @@ func getAccountID() string {
 	return os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 }
 
-// Bucket wraps an S3 bucket to provide the r2:// URI scheme.
+// Bucket wraps an HTTP bucket to provide the r2:// URI scheme.
 type Bucket struct {
-	inner      *s3pkg.Bucket
+	inner      storage.Bucket
 	bucketName string
 }
 
@@ -176,4 +190,9 @@ func (b *Bucket) PresignHeadObject(ctx context.Context, key string) (string, err
 // PresignDeleteObject generates a presigned URL for deleting an object.
 func (b *Bucket) PresignDeleteObject(ctx context.Context, key string) (string, error) {
 	return b.inner.PresignDeleteObject(ctx, key)
+}
+
+// Unwrap returns the underlying bucket.
+func (b *Bucket) Unwrap() storage.Bucket {
+	return b.inner
 }
