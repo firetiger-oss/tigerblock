@@ -40,16 +40,16 @@ func TestGetAccountID(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name          string
-		cfID          string
-		cloudflareID  string
-		expectedID    string
+		name         string
+		cfID         string
+		cloudflareID string
+		expectedID   string
 	}{
 		{
-			name:       "CF_ACCOUNT_ID takes precedence",
-			cfID:       "cf-account",
+			name:         "CF_ACCOUNT_ID takes precedence",
+			cfID:         "cf-account",
 			cloudflareID: "cloudflare-account",
-			expectedID: "cf-account",
+			expectedID:   "cf-account",
 		},
 		{
 			name:         "CLOUDFLARE_ACCOUNT_ID as fallback",
