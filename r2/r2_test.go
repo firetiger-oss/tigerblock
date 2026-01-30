@@ -30,62 +30,6 @@ func TestBucketLocation(t *testing.T) {
 	}
 }
 
-func TestGetAccountID(t *testing.T) {
-	// Save and restore environment
-	origCF := os.Getenv("CF_ACCOUNT_ID")
-	origCloudflare := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
-	defer func() {
-		os.Setenv("CF_ACCOUNT_ID", origCF)
-		os.Setenv("CLOUDFLARE_ACCOUNT_ID", origCloudflare)
-	}()
-
-	tests := []struct {
-		name         string
-		cfID         string
-		cloudflareID string
-		expectedID   string
-	}{
-		{
-			name:         "CF_ACCOUNT_ID takes precedence",
-			cfID:         "cf-account",
-			cloudflareID: "cloudflare-account",
-			expectedID:   "cf-account",
-		},
-		{
-			name:         "CLOUDFLARE_ACCOUNT_ID as fallback",
-			cfID:         "",
-			cloudflareID: "cloudflare-account",
-			expectedID:   "cloudflare-account",
-		},
-		{
-			name:         "neither set returns empty",
-			cfID:         "",
-			cloudflareID: "",
-			expectedID:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.cfID != "" {
-				os.Setenv("CF_ACCOUNT_ID", tt.cfID)
-			} else {
-				os.Unsetenv("CF_ACCOUNT_ID")
-			}
-			if tt.cloudflareID != "" {
-				os.Setenv("CLOUDFLARE_ACCOUNT_ID", tt.cloudflareID)
-			} else {
-				os.Unsetenv("CLOUDFLARE_ACCOUNT_ID")
-			}
-
-			id := getAccountID()
-			if id != tt.expectedID {
-				t.Errorf("expected %q, got %q", tt.expectedID, id)
-			}
-		})
-	}
-}
-
 func TestRegistryMissingAccountID(t *testing.T) {
 	// Save and restore environment
 	origCF := os.Getenv("CF_ACCOUNT_ID")

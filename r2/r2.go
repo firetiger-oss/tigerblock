@@ -16,6 +16,7 @@
 package r2
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -70,10 +71,7 @@ func NewRegistry(options ...Option) storage.Registry {
 	}
 
 	return storage.RegistryFunc(func(ctx context.Context, bucket string) (storage.Bucket, error) {
-		accountID := cfg.accountID
-		if accountID == "" {
-			accountID = getAccountID()
-		}
+		accountID := cmp.Or(cfg.accountID, os.Getenv("CF_ACCOUNT_ID"), os.Getenv("CLOUDFLARE_ACCOUNT_ID"))
 		if accountID == "" {
 			return nil, ErrMissingAccountID
 		}
@@ -101,14 +99,6 @@ func NewRegistry(options ...Option) storage.Registry {
 			bucketName: bucket,
 		}, nil
 	})
-}
-
-// getAccountID returns the Cloudflare account ID from environment variables.
-func getAccountID() string {
-	if id := os.Getenv("CF_ACCOUNT_ID"); id != "" {
-		return id
-	}
-	return os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 }
 
 // Bucket wraps an HTTP bucket to provide the r2:// URI scheme.
