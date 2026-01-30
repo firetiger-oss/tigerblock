@@ -151,10 +151,7 @@ func NewQueuesHandler(objectHandler notification.ObjectHandler) http.Handler {
 
 		if err := handler.Handle(r.Context(), event); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
-
-		w.WriteHeader(http.StatusOK)
 	})
 }
 
@@ -188,7 +185,5 @@ func NewBatchQueuesHandler(objectHandler notification.ObjectHandler) http.Handle
 				return
 			}
 		}
-
-		w.WriteHeader(http.StatusOK)
 	})
 }
