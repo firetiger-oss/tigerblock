@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -247,9 +248,12 @@ func TestQueuesHandler(t *testing.T) {
 func TestBatchQueuesHandler(t *testing.T) {
 	t.Run("successful batch request", func(t *testing.T) {
 		var capturedEvents []*notification.Event
+		var mu sync.Mutex
 		objectHandler := notification.ObjectHandlerFunc(
 			func(ctx context.Context, event *notification.Event) error {
+				mu.Lock()
 				capturedEvents = append(capturedEvents, event)
+				mu.Unlock()
 				return nil
 			})
 
@@ -282,11 +286,21 @@ func TestBatchQueuesHandler(t *testing.T) {
 		if len(capturedEvents) != 2 {
 			t.Errorf("expected 2 events, got %d", len(capturedEvents))
 		}
-		if capturedEvents[0].Type != notification.ObjectCreated {
-			t.Errorf("expected first event type ObjectCreated, got %q", capturedEvents[0].Type)
+		// Check that we got both event types (order is non-deterministic due to concurrent processing)
+		var hasCreated, hasDeleted bool
+		for _, event := range capturedEvents {
+			switch event.Type {
+			case notification.ObjectCreated:
+				hasCreated = true
+			case notification.ObjectDeleted:
+				hasDeleted = true
+			}
 		}
-		if capturedEvents[1].Type != notification.ObjectDeleted {
-			t.Errorf("expected second event type ObjectDeleted, got %q", capturedEvents[1].Type)
+		if !hasCreated {
+			t.Error("expected an ObjectCreated event")
+		}
+		if !hasDeleted {
+			t.Error("expected an ObjectDeleted event")
 		}
 	})
 
