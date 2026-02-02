@@ -811,6 +811,37 @@ func TestRun(t *testing.T) {
 			t.Error("expected some concurrent execution, but maxActiveWorkers was 0")
 		}
 	})
+
+	t.Run("maintains ordering", func(t *testing.T) {
+		ctx := concurrent.WithLimit(t.Context(), 5)
+
+		jobs := make([]int, 100)
+		for i := range jobs {
+			jobs[i] = i
+		}
+
+		process := func(ctx context.Context, job int) (int, error) {
+			// Vary sleep time inversely to job index to ensure
+			// ordering is maintained despite completion order
+			time.Sleep(time.Duration(100-job) * time.Microsecond)
+			return job, nil
+		}
+
+		i := 0
+		for result, err := range concurrent.Run(ctx, jobs, process) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result != i {
+				t.Fatalf("expected result %d at position %d, got %d", i, i, result)
+			}
+			i++
+		}
+
+		if i != 100 {
+			t.Fatalf("expected 100 results, got %d", i)
+		}
+	})
 }
 
 func TestRun2(t *testing.T) {
@@ -1019,6 +1050,34 @@ func TestRunTasks(t *testing.T) {
 
 		if numExecuted == 0 {
 			t.Error("expected at least one task to be executed")
+		}
+	})
+
+	t.Run("returns first error in input order", func(t *testing.T) {
+		ctx := concurrent.WithLimit(t.Context(), 10)
+		tasks := []int{0, 1, 2, 3, 4}
+
+		err1 := errors.New("error from task 1")
+		err3 := errors.New("error from task 3")
+
+		process := func(ctx context.Context, task int) error {
+			// Task 3 completes faster but task 1 should be returned first
+			switch task {
+			case 1:
+				time.Sleep(50 * time.Millisecond)
+				return err1
+			case 3:
+				time.Sleep(10 * time.Millisecond)
+				return err3
+			default:
+				time.Sleep(100 * time.Millisecond)
+				return nil
+			}
+		}
+
+		err := concurrent.RunTasks(ctx, tasks, process)
+		if err != err1 {
+			t.Errorf("expected error from task 1, got: %v", err)
 		}
 	})
 
