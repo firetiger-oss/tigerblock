@@ -45,8 +45,9 @@ func Pipeline[Out, In any](
 		}
 
 		type promise chan result
-		promises := make(chan promise)
-		semaphore := make(chan struct{}, Limit(ctx))
+		limit := Limit(ctx)
+		promises := make(chan promise, limit)
+		semaphore := make(chan struct{}, limit)
 
 		ctx, cancel := context.WithCancel(ctx)
 		go func() {
@@ -185,4 +186,34 @@ func Query[R any](ctx context.Context, tasks ...func(context.Context) (R, error)
 			return task(ctx)
 		},
 	)
+}
+
+// items converts a slice to an iterator sequence.
+// Each element is yielded with a nil error.
+func items[T any](s []T) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for _, item := range s {
+			if !yield(item, nil) {
+				return
+			}
+		}
+	}
+}
+
+// pair holds a key-value pair from a map iteration.
+type pair[K, V any] struct {
+	key K
+	val V
+}
+
+// pairs converts a map to an iterator sequence of key-value pairs.
+// Each pair is yielded with a nil error.
+func pairs[K comparable, V any](m map[K]V) iter.Seq2[pair[K, V], error] {
+	return func(yield func(pair[K, V], error) bool) {
+		for key, value := range m {
+			if !yield(pair[K, V]{key, value}, nil) {
+				return
+			}
+		}
+	}
 }

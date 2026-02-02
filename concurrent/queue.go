@@ -270,49 +270,31 @@ func Process[T any](ctx context.Context, queue *Queue[T]) iter.Seq2[T, error] {
 	}
 }
 
-// Run is a convenience function that creates a queue, adds jobs for each
-// input item, and processes them concurrently.
-// For each item in the jobs slice, the process function is called to create
-// a job. All jobs are then executed concurrently.
-// This is equivalent to:
+// Run is a convenience function that processes each item in the jobs slice
+// concurrently using the provided process function.
 //
-//	queue := NewQueueWithCapacity(len(jobs))
-//	for _, job := range jobs {
-//	    queue.Push(func(ctx context.Context, yield func(R, error) bool) {
-//	        return yield(process(ctx, job))
-//	    })
-//	}
-//	return Process(ctx, queue)
+// Results are returned in the same order as the input jobs, regardless of
+// which jobs complete first. This is achieved by using Pipeline internally.
+//
+// The concurrency level is controlled by the context's concurrency limit
+// (see WithLimit).
 func Run[R, T any](ctx context.Context, jobs []T, process func(context.Context, T) (R, error)) iter.Seq2[R, error] {
-	queue := NewQueueWithCapacity[R](len(jobs))
-	for _, job := range jobs {
-		queue.Push(func(ctx context.Context, yield func(R, error) bool) {
-			yield(process(ctx, job))
-		})
-	}
-	return Process(ctx, queue)
+	return Pipeline(ctx, items(jobs), process)
 }
 
 // Run2 is like Run but it takes its input jobs as a map.
-// For each key-value pair in the jobs map, the process function is called to create
-// a job. All jobs are then executed concurrently.
-// This is equivalent to:
 //
-//	queue := NewQueueWithCapacity[R](len(jobs))
-//	for key, value := range jobs {
-//	    queue.Push(func(ctx context.Context, yield func(R, error) bool) {
-//	        return yield(process(ctx, key, value))
-//	    })
-//	}
-//	return Process(ctx, queue)
+// For each key-value pair in the jobs map, the process function is called
+// concurrently. Note that map iteration order in Go is not deterministic,
+// so while results maintain the iteration order, that order itself varies
+// between runs.
+//
+// The concurrency level is controlled by the context's concurrency limit
+// (see WithLimit).
 func Run2[R any, K comparable, V any](ctx context.Context, jobs map[K]V, process func(context.Context, K, V) (R, error)) iter.Seq2[R, error] {
-	queue := NewQueueWithCapacity[R](len(jobs))
-	for key, value := range jobs {
-		queue.Push(func(ctx context.Context, yield func(R, error) bool) {
-			yield(process(ctx, key, value))
-		})
-	}
-	return Process(ctx, queue)
+	return Pipeline(ctx, pairs(jobs), func(ctx context.Context, p pair[K, V]) (R, error) {
+		return process(ctx, p.key, p.val)
+	})
 }
 
 // Task represents a simple function that performs work and may return an error.
@@ -378,40 +360,40 @@ func ProcessTasks(ctx context.Context, tasks *TaskQueue) error {
 	return nil
 }
 
-// RunTasks is a convenience function that creates a task queue, adds tasks
-// for each input item, and processes them concurrently.
+// RunTasks processes each item in the tasks slice concurrently using the
+// provided process function, returning the first error encountered in input
+// order.
 //
-// For each item in the tasks slice, the process function is called to create
-// a task. All tasks are then executed concurrently with fail-fast behavior.
+// Tasks are executed concurrently, but errors are checked in the order of
+// the input slice. This means if tasks[0] and tasks[2] both fail, the error
+// from tasks[0] will be returned even if tasks[2] completed first.
 //
-// This is equivalent to:
-//
-//	queue := NewTaskQueueWithCapacity(len(tasks))
-//	for _, task := range tasks {
-//	    queue.Push(func(ctx context.Context) error {
-//	        return process(ctx, task)
-//	    })
-//	}
-//	return ProcessTasks(ctx, queue)
+// The concurrency level is controlled by the context's concurrency limit
+// (see WithLimit).
 //
 // Type parameter T represents the type of input items to process.
 func RunTasks[T any](ctx context.Context, tasks []T, process func(context.Context, T) error) error {
-	queue := NewTaskQueueWithCapacity(len(tasks))
-	for _, task := range tasks {
-		queue.Push(func(ctx context.Context) error {
-			return process(ctx, task)
-		})
+	for _, err := range Pipeline(ctx, items(tasks), func(ctx context.Context, task T) (struct{}, error) {
+		return struct{}{}, process(ctx, task)
+	}) {
+		if err != nil {
+			return err
+		}
 	}
-	return ProcessTasks(ctx, queue)
+	return nil
 }
 
 // RunTasks2 is like RunTasks but it takes its input tasks as a map.
+//
+// Note that map iteration order in Go is not deterministic, so while errors
+// are returned in iteration order, that order itself varies between runs.
 func RunTasks2[K comparable, V any](ctx context.Context, tasks map[K]V, process func(context.Context, K, V) error) error {
-	queue := NewTaskQueueWithCapacity(len(tasks))
-	for key, value := range tasks {
-		queue.Push(func(ctx context.Context) error {
-			return process(ctx, key, value)
-		})
+	for _, err := range Pipeline(ctx, pairs(tasks), func(ctx context.Context, p pair[K, V]) (struct{}, error) {
+		return struct{}{}, process(ctx, p.key, p.val)
+	}) {
+		if err != nil {
+			return err
+		}
 	}
-	return ProcessTasks(ctx, queue)
+	return nil
 }
