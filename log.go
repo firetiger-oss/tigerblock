@@ -160,7 +160,11 @@ func (b *loggedBucket) PutObject(ctx context.Context, key string, value io.Reade
 	attrContentType := makeAttrContentType(object.ContentType)
 	attrDuration := makeAttrDuration(start)
 	if err != nil {
-		b.logger.ErrorContext(ctx, op, attrKey, attrSize, attrETag, attrContentType, attrDuration, makeAttrError(err))
+		level := slog.LevelError
+		if errors.Is(err, ErrObjectNotMatch) || errors.Is(err, ErrTooManyRequests) {
+			level = slog.LevelWarn
+		}
+		b.logger.Log(ctx, level, op, attrKey, attrSize, attrETag, attrContentType, attrDuration, makeAttrError(err))
 	} else {
 		b.logger.DebugContext(ctx, op, attrKey, attrSize, attrETag, attrContentType, attrDuration)
 	}
