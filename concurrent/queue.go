@@ -13,7 +13,7 @@ import (
 // DefaultQueueCapacity is the default maximum number of jobs that can be queued
 // when using NewQueue. This provides a reasonable default for most use cases
 // while preventing unbounded memory growth.
-const DefaultQueueCapacity = 100_000
+const DefaultQueueCapacity = 1_000_000
 
 // ErrFull is returned when a job queue has reached its capacity limit.
 // When the queue is full, additional jobs will be replaced with error-emitting
