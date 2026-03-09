@@ -21,12 +21,18 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
 
+    env:
+      GOPRIVATE: github.com/firetiger-oss/*
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Configure private Go modules
+        run: git config --global url."https://${{ secrets.FIRETIGER_OSS_READ_ONLY }}@github.com/firetiger-oss/".insteadOf "https://github.com/firetiger-oss/"
 
       - name: fmt
         run: test -z $(gofmt -l . | head -n 1) || ( gofmt -d . ; exit 1 )
