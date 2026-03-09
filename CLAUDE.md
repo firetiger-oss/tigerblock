@@ -122,10 +122,6 @@ Retry logic:
 - `FullJitter(strategy)` - Adds randomization to prevent thundering herd
 - `Watch[T](ctx, fn)` - Polls and yields only when values change
 
-### concurrent/
-- `WithLimit(ctx, n)` - Sets concurrency limit in context
-- `Limit(ctx)` - Retrieves limit (default: 10, max: 1000)
-
 ### uri/
 - `Split(uri) (scheme, location, path)` - Parses storage URIs
 - `Join(scheme, location, path) string` - Constructs URIs
@@ -207,7 +203,6 @@ Iterator utilities:
 ├── backoff/                # Retry strategies
 ├── cache/                  # Cache implementations
 ├── cmd/                    # Command line tools
-├── concurrent/             # Concurrency utilities
 ├── file/                   # File system backend
 ├── gs/                     # Google Cloud Storage backend
 │   └── gsclient/           # Custom streaming upload client
@@ -241,6 +236,7 @@ go test ./s3
 ### Dependencies
 - **AWS SDK v2**: S3 integration
 - **Google Cloud Storage**: GCS integration
+- **github.com/firetiger-oss/concurrent**: Structured concurrency primitives (pipelines, queues, concurrency limits). Use this package for all concurrent work instead of raw goroutines.
 - **fsnotify**: File system watching
 - **OpenTelemetry**: Tracing
 - **kway-go**: K-way merge for sorted lists
@@ -266,7 +262,7 @@ go test ./s3
 
 ## Compatibility
 
-- **Go 1.24.4+** (uses Go 1.23+ iterator patterns `iter.Seq2`)
+- **Go 1.25+** (uses Go 1.23+ iterator patterns `iter.Seq2`)
 - Backward compatible API design
 - Semantic versioning
 
