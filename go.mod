@@ -1,6 +1,6 @@
 module github.com/firetiger-oss/storage
 
-go 1.24.4
+go 1.25
 
 require (
 	cloud.google.com/go/secretmanager v1.16.0
@@ -14,6 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.88.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.40.5
 	github.com/aws/smithy-go v1.24.0
+	github.com/firetiger-oss/concurrent v1.0.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/fsouza/fake-gcs-server v1.51.0
 	github.com/google/uuid v1.6.0

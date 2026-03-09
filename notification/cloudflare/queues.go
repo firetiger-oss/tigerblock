@@ -29,7 +29,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/firetiger-oss/storage/concurrent"
+	"github.com/firetiger-oss/concurrent"
 	"github.com/firetiger-oss/storage/notification"
 	"github.com/firetiger-oss/storage/uri"
 )

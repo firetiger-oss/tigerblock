@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/achille-roussel/kway-go"
-	"github.com/firetiger-oss/storage/concurrent"
+	"github.com/firetiger-oss/concurrent"
 	"github.com/firetiger-oss/storage/internal/sequtil"
 )
 
