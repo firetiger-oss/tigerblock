@@ -26,9 +26,9 @@ func makeTemporary(err error) error { return &temporaryError{err: err} }
 
 type expectedError struct{ err error }
 
-func (e *expectedError) Error() string   { return e.err.Error() }
-func (e *expectedError) Unwrap() error   { return e.err }
-func (e *expectedError) Expected() bool  { return true }
+func (e *expectedError) Error() string  { return e.err.Error() }
+func (e *expectedError) Unwrap() error  { return e.err }
+func (e *expectedError) Expected() bool { return true }
 
 func makeExpected(err error) error { return &expectedError{err: err} }
 
