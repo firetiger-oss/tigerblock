@@ -24,17 +24,25 @@ func (e *temporaryError) Temporary() bool { return true }
 
 func makeTemporary(err error) error { return &temporaryError{err: err} }
 
+type expectedError struct{ err error }
+
+func (e *expectedError) Error() string   { return e.err.Error() }
+func (e *expectedError) Unwrap() error   { return e.err }
+func (e *expectedError) Expected() bool  { return true }
+
+func makeExpected(err error) error { return &expectedError{err: err} }
+
 var (
 	ErrBucketExist         = errors.New("bucket exist")
 	ErrBucketNotFound      = errors.New("bucket not found")
 	ErrBucketReadOnly      = errors.New("read-only bucket")
-	ErrObjectNotFound      = errors.New("object not found")
+	ErrObjectNotFound      = makeExpected(errors.New("object not found"))
 	ErrObjectNotMatch      = makeTemporary(errors.New("object mismatch"))
 	ErrInvalidObjectKey    = errors.New("invalid object key")
 	ErrInvalidObjectTag    = errors.New("invalid object tag")
 	ErrInvalidRange        = errors.New("offset out of range")
 	ErrPresignNotSupported = errors.New("presigned URLs not supported")
-	ErrPresignRedirect     = errors.New("redirect to presigned URL")
+	ErrPresignRedirect     = makeExpected(errors.New("redirect to presigned URL"))
 	ErrTooManyRequests     = makeTemporary(errors.New("too many requests"))
 )
 

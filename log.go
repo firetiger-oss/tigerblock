@@ -13,12 +13,20 @@ import (
 	"github.com/firetiger-oss/storage/uri"
 )
 
+func isExpectedError(err error) bool {
+	var e interface{ Expected() bool }
+	return errors.As(err, &e) && e.Expected()
+}
+
 func isTemporaryError(err error) bool {
 	var e interface{ Temporary() bool }
 	return errors.As(err, &e) && e.Temporary()
 }
 
 func logLevelOf(err error) slog.Level {
+	if isExpectedError(err) {
+		return slog.LevelDebug
+	}
 	if isTemporaryError(err) {
 		return slog.LevelWarn
 	}
@@ -82,11 +90,7 @@ func (b *loggedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, 
 	attrKey := makeAttrKey(b, key)
 	attrDuration := makeAttrDuration(start)
 	if err != nil {
-		if errors.Is(err, ErrObjectNotFound) {
-			b.logger.DebugContext(ctx, op, attrKey, attrDuration, makeAttrError(err))
-		} else {
-			b.logger.Log(ctx, logLevelOf(err), op, attrKey, attrDuration, makeAttrError(err))
-		}
+		b.logger.Log(ctx, logLevelOf(err), op, attrKey, attrDuration, makeAttrError(err))
 	} else {
 		attrSize := makeAttrSize(object.Size)
 		attrETag := makeAttrETag(object.ETag, "")
@@ -107,11 +111,7 @@ func (b *loggedBucket) GetObject(ctx context.Context, key string, options ...Get
 	if err != nil {
 		attrKey := makeAttrKey(b, key)
 		attrDuration := makeAttrDuration(start)
-		if errors.Is(err, ErrObjectNotFound) {
-			b.logger.DebugContext(ctx, "GetObject", attrKey, attrDuration, makeAttrError(err))
-		} else {
-			b.logger.Log(ctx, logLevelOf(err), "GetObject", attrKey, attrDuration, makeAttrError(err))
-		}
+		b.logger.Log(ctx, logLevelOf(err), "GetObject", attrKey, attrDuration, makeAttrError(err))
 	} else {
 		r = &loggedReadCloser{
 			bucket: b,
@@ -225,11 +225,7 @@ func (b *loggedBucket) CopyObject(ctx context.Context, from, to string, options 
 	attrTo := slog.String("to", to)
 	attrDuration := makeAttrDuration(start)
 	if err != nil {
-		if errors.Is(err, ErrObjectNotFound) {
-			b.logger.DebugContext(ctx, op, attrFrom, attrTo, attrDuration, makeAttrError(err))
-		} else {
-			b.logger.Log(ctx, logLevelOf(err), op, attrFrom, attrTo, attrDuration, makeAttrError(err))
-		}
+		b.logger.Log(ctx, logLevelOf(err), op, attrFrom, attrTo, attrDuration, makeAttrError(err))
 	} else {
 		b.logger.DebugContext(ctx, op, attrFrom, attrTo, attrDuration)
 	}
