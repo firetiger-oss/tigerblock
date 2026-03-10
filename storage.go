@@ -16,18 +16,26 @@ import (
 	"github.com/firetiger-oss/storage/uri"
 )
 
+type temporaryError struct{ err error }
+
+func (e *temporaryError) Error() string   { return e.err.Error() }
+func (e *temporaryError) Unwrap() error   { return e.err }
+func (e *temporaryError) Temporary() bool { return true }
+
+func makeTemporary(err error) error { return &temporaryError{err: err} }
+
 var (
 	ErrBucketExist         = errors.New("bucket exist")
 	ErrBucketNotFound      = errors.New("bucket not found")
 	ErrBucketReadOnly      = errors.New("read-only bucket")
 	ErrObjectNotFound      = errors.New("object not found")
-	ErrObjectNotMatch      = errors.New("object mismatch")
+	ErrObjectNotMatch      = makeTemporary(errors.New("object mismatch"))
 	ErrInvalidObjectKey    = errors.New("invalid object key")
 	ErrInvalidObjectTag    = errors.New("invalid object tag")
 	ErrInvalidRange        = errors.New("offset out of range")
 	ErrPresignNotSupported = errors.New("presigned URLs not supported")
 	ErrPresignRedirect     = errors.New("redirect to presigned URL")
-	ErrTooManyRequests     = errors.New("too many requests")
+	ErrTooManyRequests     = makeTemporary(errors.New("too many requests"))
 )
 
 const (
