@@ -61,7 +61,16 @@ type objectHandler struct {
 	deleteAfterProcessing bool
 }
 
-func (h *objectHandler) HandleEvent(ctx context.Context, event *Event) error {
+func (h *objectHandler) HandleEvents(ctx context.Context, events ...*Event) error {
+	for _, event := range events {
+		if err := h.handleEvent(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *objectHandler) handleEvent(ctx context.Context, event *Event) error {
 	// Run filters before any expensive operations
 	for _, filter := range h.filters {
 		ok, err := filter(ctx, event)

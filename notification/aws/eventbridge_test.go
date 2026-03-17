@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,8 +20,8 @@ import (
 func TestS3EventHandlerObjectCreated(t *testing.T) {
 	var receivedEvent notification.Event
 
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		receivedEvent = *event
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
+		receivedEvent = *events[0]
 		return nil
 	})
 
@@ -72,8 +71,8 @@ func TestS3EventHandlerObjectCreated(t *testing.T) {
 func TestS3EventHandlerObjectDeleted(t *testing.T) {
 	var receivedEvent notification.Event
 
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		receivedEvent = *event
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
+		receivedEvent = *events[0]
 		return nil
 	})
 
@@ -101,7 +100,7 @@ func TestS3EventHandlerObjectDeleted(t *testing.T) {
 }
 
 func TestS3EventHandlerUnsupportedEventType(t *testing.T) {
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
 		return nil
 	})
 
@@ -171,7 +170,7 @@ func TestNewS3EventBridgeHandler(t *testing.T) {
 }
 
 func TestNewS3EventBridgeHandlerInvalidMethod(t *testing.T) {
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
 		return nil
 	})
 
@@ -187,7 +186,7 @@ func TestNewS3EventBridgeHandlerInvalidMethod(t *testing.T) {
 }
 
 func TestNewS3EventBridgeHandlerInvalidJSON(t *testing.T) {
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
 		return nil
 	})
 
@@ -205,10 +204,10 @@ func TestNewS3EventBridgeHandlerInvalidJSON(t *testing.T) {
 // Tests for S3 Lambda Handler
 
 func TestS3LambdaHandlerObjectCreated(t *testing.T) {
-	var receivedEvent notification.Event
+	var receivedEvents []*notification.Event
 
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		receivedEvent = *event
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
+		receivedEvents = events
 		return nil
 	})
 
@@ -236,6 +235,10 @@ func TestS3LambdaHandlerObjectCreated(t *testing.T) {
 		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
+	if len(receivedEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(receivedEvents))
+	}
+	receivedEvent := receivedEvents[0]
 	if receivedEvent.Type != notification.ObjectCreated {
 		t.Errorf("expected type ObjectCreated, got %s", receivedEvent.Type)
 	}
@@ -258,10 +261,10 @@ func TestS3LambdaHandlerObjectCreated(t *testing.T) {
 }
 
 func TestS3LambdaHandlerObjectDeleted(t *testing.T) {
-	var receivedEvent notification.Event
+	var receivedEvents []*notification.Event
 
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		receivedEvent = *event
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
+		receivedEvents = events
 		return nil
 	})
 
@@ -283,19 +286,19 @@ func TestS3LambdaHandlerObjectDeleted(t *testing.T) {
 		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
-	if receivedEvent.Type != notification.ObjectDeleted {
-		t.Errorf("expected type ObjectDeleted, got %s", receivedEvent.Type)
+	if len(receivedEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(receivedEvents))
+	}
+	if receivedEvents[0].Type != notification.ObjectDeleted {
+		t.Errorf("expected type ObjectDeleted, got %s", receivedEvents[0].Type)
 	}
 }
 
 func TestS3LambdaHandlerMultipleRecords(t *testing.T) {
-	var mu sync.Mutex
-	var receivedEvents []notification.Event
+	var receivedEvents []*notification.Event
 
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		mu.Lock()
-		receivedEvents = append(receivedEvents, *event)
-		mu.Unlock()
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
+		receivedEvents = events
 		return nil
 	})
 
@@ -329,119 +332,44 @@ func TestS3LambdaHandlerMultipleRecords(t *testing.T) {
 		t.Fatalf("expected 2 events, got %d", len(receivedEvents))
 	}
 
-	// Events may be processed in any order due to concurrent execution
-	objects := make(map[string]bool)
-	for _, e := range receivedEvents {
-		objects[e.Object] = true
+	// Events are delivered in order (no longer concurrent)
+	if receivedEvents[0].Object != uri.Join("s3", "bucket-1", "file1.txt") {
+		t.Errorf("expected first event file1.txt, got %s", receivedEvents[0].Object)
 	}
-	if !objects[uri.Join("s3", "bucket-1", "file1.txt")] {
-		t.Error("expected file1.txt in received events")
-	}
-	if !objects[uri.Join("s3", "bucket-2", "file2.txt")] {
-		t.Error("expected file2.txt in received events")
+	if receivedEvents[1].Object != uri.Join("s3", "bucket-2", "file2.txt") {
+		t.Errorf("expected second event file2.txt, got %s", receivedEvents[1].Object)
 	}
 }
 
-// Tests for S3 Lambda Batch Handler
-
-func TestS3LambdaBatchHandlerMultipleRecords(t *testing.T) {
-	var received []*notification.Event
-	batchHandler := notification.BatchObjectHandlerFunc(func(ctx context.Context, events []*notification.Event) error {
-		received = events
+func TestS3LambdaHandlerUnsupportedEventName(t *testing.T) {
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
 		return nil
 	})
 
-	handler := aws.NewS3LambdaBatchHandler(batchHandler)
-
-	eventTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
-	s3Event := aws.S3Event{
-		Records: []aws.S3EventRecord{
-			{
-				EventName: "s3:ObjectCreated:Put",
-				AWSRegion: "us-west-2",
-				EventTime: eventTime,
-				S3: aws.S3Entity{
-					Bucket: aws.S3Bucket{Name: "bucket-1"},
-					Object: aws.S3Object{Key: "file1.txt", Size: 100, ETag: "abc"},
-				},
-			},
-			{
-				EventName: "s3:ObjectRemoved:Delete",
-				AWSRegion: "us-east-1",
-				S3: aws.S3Entity{
-					Bucket: aws.S3Bucket{Name: "bucket-2"},
-					Object: aws.S3Object{Key: "file2.txt"},
-				},
-			},
-		},
-	}
-
-	err := handler.HandleEvent(context.Background(), s3Event)
-	if err != nil {
-		t.Fatalf("HandleEvent failed: %v", err)
-	}
-
-	if len(received) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(received))
-	}
-
-	// Events are delivered in order
-	if received[0].Type != notification.ObjectCreated {
-		t.Errorf("expected first event ObjectCreated, got %s", received[0].Type)
-	}
-	if received[0].Object != uri.Join("s3", "bucket-1", "file1.txt") {
-		t.Errorf("expected first object bucket-1/file1.txt, got %s", received[0].Object)
-	}
-	if received[0].Size != 100 {
-		t.Errorf("expected first event size 100, got %d", received[0].Size)
-	}
-	if received[1].Type != notification.ObjectDeleted {
-		t.Errorf("expected second event ObjectDeleted, got %s", received[1].Type)
-	}
-	if received[1].Object != uri.Join("s3", "bucket-2", "file2.txt") {
-		t.Errorf("expected second object bucket-2/file2.txt, got %s", received[1].Object)
-	}
-}
-
-func TestS3LambdaBatchHandlerSingleRecord(t *testing.T) {
-	var received []*notification.Event
-	batchHandler := notification.BatchObjectHandlerFunc(func(ctx context.Context, events []*notification.Event) error {
-		received = events
-		return nil
-	})
-
-	handler := aws.NewS3LambdaBatchHandler(batchHandler)
+	handler := aws.NewS3LambdaHandler(objectHandler)
 
 	s3Event := aws.S3Event{
 		Records: []aws.S3EventRecord{{
-			EventName: "s3:ObjectCreated:Put",
-			AWSRegion: "us-west-2",
+			EventName: "s3:ObjectRestore:Completed",
 			S3: aws.S3Entity{
 				Bucket: aws.S3Bucket{Name: "my-bucket"},
-				Object: aws.S3Object{Key: "single.txt", Size: 42},
+				Object: aws.S3Object{Key: "restored.txt"},
 			},
 		}},
 	}
 
 	err := handler.HandleEvent(context.Background(), s3Event)
-	if err != nil {
-		t.Fatalf("HandleEvent failed: %v", err)
-	}
-
-	if len(received) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(received))
-	}
-	if received[0].Object != uri.Join("s3", "my-bucket", "single.txt") {
-		t.Errorf("expected my-bucket/single.txt, got %s", received[0].Object)
+	if err == nil {
+		t.Fatal("expected error for unsupported event name")
 	}
 }
 
-func TestS3LambdaBatchHandlerUnsupportedEvent(t *testing.T) {
-	batchHandler := notification.BatchObjectHandlerFunc(func(ctx context.Context, events []*notification.Event) error {
+func TestS3LambdaHandlerUnsupportedEventInBatch(t *testing.T) {
+	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, events ...*notification.Event) error {
 		return nil
 	})
 
-	handler := aws.NewS3LambdaBatchHandler(batchHandler)
+	handler := aws.NewS3LambdaHandler(objectHandler)
 
 	s3Event := aws.S3Event{
 		Records: []aws.S3EventRecord{
@@ -460,29 +388,6 @@ func TestS3LambdaBatchHandlerUnsupportedEvent(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	err := handler.HandleEvent(context.Background(), s3Event)
-	if err == nil {
-		t.Fatal("expected error for unsupported event name")
-	}
-}
-
-func TestS3LambdaHandlerUnsupportedEventName(t *testing.T) {
-	objectHandler := notification.ObjectHandlerFunc(func(ctx context.Context, event *notification.Event) error {
-		return nil
-	})
-
-	handler := aws.NewS3LambdaHandler(objectHandler)
-
-	s3Event := aws.S3Event{
-		Records: []aws.S3EventRecord{{
-			EventName: "s3:ObjectRestore:Completed",
-			S3: aws.S3Entity{
-				Bucket: aws.S3Bucket{Name: "my-bucket"},
-				Object: aws.S3Object{Key: "restored.txt"},
-			},
-		}},
 	}
 
 	err := handler.HandleEvent(context.Background(), s3Event)

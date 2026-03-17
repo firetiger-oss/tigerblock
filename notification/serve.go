@@ -11,11 +11,6 @@ import (
 // register their respective handlers.
 var DefaultServeOptions []ServeOption
 
-// DefaultBatchServeOptions contains options registered by subpackages via init().
-// Import notification/aws or notification/cloudflare to register their
-// respective batch handlers.
-var DefaultBatchServeOptions []BatchServeOption
-
 // Serve starts a notification handler using registered options.
 //
 // Environment detection for Lambda mode requires importing notification/aws.
@@ -92,82 +87,4 @@ func WithHandler(route string, handler func(ObjectHandler) http.Handler) ServeOp
 	return func(o *serveOptions) {
 		o.handlers = append(o.handlers, routeHandler{route: route, handler: handler})
 	}
-}
-
-// ServeBatch starts a batch notification handler using registered options.
-//
-// Environment detection for Lambda mode requires importing notification/aws.
-// HTTP endpoints are registered via DefaultBatchServeOptions by importing subpackages.
-func ServeBatch(handler BatchObjectHandler, options ...BatchServeOption) error {
-	opts := defaultBatchServeOptions()
-	for _, opt := range DefaultBatchServeOptions {
-		opt(&opts)
-	}
-	for _, opt := range options {
-		opt(&opts)
-	}
-
-	// Check if serve logic was overridden (e.g., Lambda mode)
-	if opts.serve != nil {
-		opts.serve(handler)
-		return nil
-	}
-
-	// HTTP mode
-	mux := http.NewServeMux()
-	for _, h := range opts.handlers {
-		mux.Handle(h.route, h.handler(handler))
-	}
-
-	if opts.healthPath != "" {
-		mux.HandleFunc("GET "+opts.healthPath, func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
-	}
-
-	return http.ListenAndServe(":"+opts.port, mux)
-}
-
-type batchServeOptions struct {
-	healthPath string
-	port       string
-	serve      func(BatchObjectHandler)
-	handlers   []batchRouteHandler
-}
-
-type batchRouteHandler struct {
-	route   string
-	handler func(BatchObjectHandler) http.Handler
-}
-
-func defaultBatchServeOptions() batchServeOptions {
-	return batchServeOptions{
-		healthPath: "/health",
-		port:       cmp.Or(os.Getenv("PORT"), "8080"),
-	}
-}
-
-// BatchServeOption is a functional option for configuring ServeBatch.
-type BatchServeOption func(*batchServeOptions)
-
-// WithBatchServe overrides the default HTTP serve logic (used by aws package for Lambda)
-func WithBatchServe(serve func(BatchObjectHandler)) BatchServeOption {
-	return func(o *batchServeOptions) { o.serve = serve }
-}
-
-// WithBatchHandler registers an HTTP handler for a route
-func WithBatchHandler(route string, handler func(BatchObjectHandler) http.Handler) BatchServeOption {
-	return func(o *batchServeOptions) {
-		o.handlers = append(o.handlers, batchRouteHandler{route: route, handler: handler})
-	}
-}
-
-// WithBatchHealthPath sets the health check endpoint path for ServeBatch (default: "/health", empty to disable)
-func WithBatchHealthPath(path string) BatchServeOption {
-	return func(o *batchServeOptions) { o.healthPath = path }
-}
-
-// WithBatchPort sets the HTTP port for ServeBatch (default: PORT env or "8080")
-func WithBatchPort(port string) BatchServeOption {
-	return func(o *batchServeOptions) { o.port = port }
 }

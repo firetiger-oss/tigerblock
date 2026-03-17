@@ -16,13 +16,6 @@ func init() {
 				lambda.Start(handler.HandleEvent)
 			}),
 		)
-
-		notification.DefaultBatchServeOptions = append(notification.DefaultBatchServeOptions,
-			notification.WithBatchServe(func(h notification.BatchObjectHandler) {
-				handler := NewS3LambdaBatchHandler(h)
-				lambda.Start(handler.HandleEvent)
-			}),
-		)
 	}
 
 	// Register EventBridge HTTP handler

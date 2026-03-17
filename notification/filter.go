@@ -37,53 +37,23 @@ func FilterEventType(types ...EventType) Filter {
 }
 
 // NewCreateObjectHandler creates an ObjectHandler that only processes ObjectCreated events.
-func NewCreateObjectHandler(fn func(context.Context, *Event) error) ObjectHandler {
+func NewCreateObjectHandler(fn func(context.Context, ...*Event) error) ObjectHandler {
 	return WithFilters(ObjectHandlerFunc(fn), FilterEventType(ObjectCreated))
 }
 
 // NewDeleteObjectHandler creates an ObjectHandler that only processes ObjectDeleted events.
-func NewDeleteObjectHandler(fn func(context.Context, *Event) error) ObjectHandler {
+func NewDeleteObjectHandler(fn func(context.Context, ...*Event) error) ObjectHandler {
 	return WithFilters(ObjectHandlerFunc(fn), FilterEventType(ObjectDeleted))
 }
 
 // WithFilters wraps an ObjectHandler to apply filters before processing.
-// All filters must pass for the event to be handled.
+// Events that don't pass all filters are removed from the batch.
+// If no events remain after filtering, the handler is not called.
 func WithFilters(handler ObjectHandler, filters ...Filter) ObjectHandler {
 	if len(filters) == 0 {
 		return handler
 	}
-	return ObjectHandlerFunc(func(ctx context.Context, event *Event) error {
-		for _, filter := range filters {
-			ok, err := filter(ctx, event)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return nil
-			}
-		}
-		return handler.HandleEvent(ctx, event)
-	})
-}
-
-// NewCreateBatchObjectHandler creates a BatchObjectHandler that only processes ObjectCreated events.
-func NewCreateBatchObjectHandler(fn func(context.Context, []*Event) error) BatchObjectHandler {
-	return WithBatchFilters(BatchObjectHandlerFunc(fn), FilterEventType(ObjectCreated))
-}
-
-// NewDeleteBatchObjectHandler creates a BatchObjectHandler that only processes ObjectDeleted events.
-func NewDeleteBatchObjectHandler(fn func(context.Context, []*Event) error) BatchObjectHandler {
-	return WithBatchFilters(BatchObjectHandlerFunc(fn), FilterEventType(ObjectDeleted))
-}
-
-// WithBatchFilters wraps a BatchObjectHandler to apply filters before processing.
-// Events that don't pass all filters are removed from the batch.
-// If no events remain, HandleEventBatch is not called.
-func WithBatchFilters(handler BatchObjectHandler, filters ...Filter) BatchObjectHandler {
-	if len(filters) == 0 {
-		return handler
-	}
-	return BatchObjectHandlerFunc(func(ctx context.Context, events []*Event) error {
+	return ObjectHandlerFunc(func(ctx context.Context, events ...*Event) error {
 		filtered := make([]*Event, 0, len(events))
 		for _, event := range events {
 			pass := true
@@ -104,6 +74,6 @@ func WithBatchFilters(handler BatchObjectHandler, filters ...Filter) BatchObject
 		if len(filtered) == 0 {
 			return nil
 		}
-		return handler.HandleEventBatch(ctx, filtered)
+		return handler.HandleEvents(ctx, filtered...)
 	})
 }

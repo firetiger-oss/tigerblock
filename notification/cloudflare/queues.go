@@ -25,11 +25,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"net/http"
 	"time"
 
-	"github.com/firetiger-oss/concurrent"
 	"github.com/firetiger-oss/storage/notification"
 	"github.com/firetiger-oss/storage/uri"
 )
@@ -97,7 +95,7 @@ func (h *R2EventHandler) Handle(ctx context.Context, event R2Event) error {
 	if err != nil {
 		return err
 	}
-	return h.objectHandler.HandleEvent(ctx, unified)
+	return h.objectHandler.HandleEvents(ctx, unified)
 }
 
 // eventFromR2Event converts an R2Event to a unified notification.Event.
@@ -156,43 +154,12 @@ func NewQueuesHandler(objectHandler notification.ObjectHandler) http.Handler {
 	})
 }
 
-// NewBatchQueuesHandler creates an http.Handler that receives batches of R2 events.
+// NewBatchQueuesHandler creates an http.Handler that receives batches of R2 events
+// and forwards them as a single batch to the ObjectHandler.
 //
-// This is useful when the Worker forwards multiple events in a single request
-// to reduce HTTP overhead. The expected request body is an array of R2Event objects.
-//
-// Events are processed concurrently using the context's concurrency limit.
-// Use concurrent.WithLimit to control parallelism.
+// The expected request body is an array of R2Event objects. All events are converted
+// and delivered as a single HandleEvents call.
 func NewBatchQueuesHandler(objectHandler notification.ObjectHandler) http.Handler {
-	handler := NewR2EventHandler(objectHandler)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		events := decodeEventArray(json.NewDecoder(r.Body))
-
-		for _, err := range concurrent.Pipeline(r.Context(), events,
-			func(ctx context.Context, event R2Event) (struct{}, error) {
-				return struct{}{}, handler.Handle(ctx, event)
-			},
-		) {
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-	})
-}
-
-// NewBatchQueuesEventBatchHandler creates an http.Handler that receives batches
-// of R2 events and forwards them as a batch to a BatchObjectHandler.
-//
-// Unlike NewBatchQueuesHandler which processes events individually and concurrently,
-// this handler converts all events and delivers them as a single batch call,
-// enabling batch DB writes and cross-event deduplication.
-func NewBatchQueuesEventBatchHandler(handler notification.BatchObjectHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -215,45 +182,9 @@ func NewBatchQueuesEventBatchHandler(handler notification.BatchObjectHandler) ht
 			events = append(events, unified)
 		}
 
-		if err := handler.HandleEventBatch(r.Context(), events); err != nil {
+		if err := objectHandler.HandleEvents(r.Context(), events...); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	})
-}
-
-// decodeEventArray streams R2Event objects from a JSON array using a decoder.
-func decodeEventArray(dec *json.Decoder) iter.Seq2[R2Event, error] {
-	return func(yield func(R2Event, error) bool) {
-		token, err := dec.Token()
-		if err != nil {
-			yield(R2Event{}, fmt.Errorf("failed to read opening bracket: %w", err))
-			return
-		}
-		if delim, ok := token.(json.Delim); !ok || delim != '[' {
-			yield(R2Event{}, fmt.Errorf("expected '[', got %v", token))
-			return
-		}
-
-		for dec.More() {
-			var event R2Event
-			if err := dec.Decode(&event); err != nil {
-				yield(R2Event{}, fmt.Errorf("failed to decode event: %w", err))
-				return
-			}
-			if !yield(event, nil) {
-				return
-			}
-		}
-
-		token, err = dec.Token()
-		if err != nil {
-			yield(R2Event{}, fmt.Errorf("failed to read closing bracket: %w", err))
-			return
-		}
-		if delim, ok := token.(json.Delim); !ok || delim != ']' {
-			yield(R2Event{}, fmt.Errorf("expected ']', got %v", token))
-			return
-		}
-	}
 }

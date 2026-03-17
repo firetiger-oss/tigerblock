@@ -105,7 +105,7 @@ func (h *BucketNotificationHandler) Handle(ctx context.Context, msg PubSubMessag
 		}
 	}
 
-	return h.objectHandler.HandleEvent(ctx, &unified)
+	return h.objectHandler.HandleEvents(ctx, &unified)
 }
 
 // NewPubSubHandler creates an http.Handler that receives GCS bucket notifications
