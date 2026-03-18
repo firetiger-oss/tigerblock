@@ -303,7 +303,10 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 }
 
 func (c *cachedBucket) PutObject(ctx context.Context, key string, r io.Reader, options ...PutOption) (ObjectInfo, error) {
-	return c.bucket.PutObject(ctx, key, r, options...)
+	info, err := c.bucket.PutObject(ctx, key, r, options...)
+	c.objects.Drop(key)
+	c.infos.Drop(key)
+	return info, err
 }
 
 func (c *cachedBucket) DeleteObject(ctx context.Context, key string) error {

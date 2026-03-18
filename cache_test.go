@@ -656,6 +656,64 @@ func TestCacheTTLExpiration(t *testing.T) {
 	t.Log("TTL expiration test passed: cache correctly refreshed after TTL")
 }
 
+// TestCachedBucketPutObjectInvalidatesCache verifies that PutObject evicts stale entries
+// so that subsequent GetObject/HeadObject calls read fresh data from the underlying bucket
+// rather than returning outdated cached bytes or ETags.
+func TestCachedBucketPutObjectInvalidatesCache(t *testing.T) {
+	cache := storage.NewCache()
+	memBucket := new(memory.Bucket)
+	bucket := cache.AdaptBucket(memBucket)
+	ctx := context.Background()
+
+	firstData := []byte("first version")
+	secondData := []byte("second version - longer content")
+	testKey := "invalidation-test"
+
+	// Write and read the first version to populate the cache.
+	_, err := bucket.PutObject(ctx, testKey, bytes.NewReader(firstData))
+	if err != nil {
+		t.Fatalf("first PutObject failed: %v", err)
+	}
+	reader, info1, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("first GetObject failed: %v", err)
+	}
+	got, _ := io.ReadAll(reader)
+	reader.Close()
+	if !bytes.Equal(got, firstData) {
+		t.Fatalf("first GetObject: got %q, want %q", got, firstData)
+	}
+
+	// Overwrite via the cached bucket — this must evict the cache entry.
+	_, err = bucket.PutObject(ctx, testKey, bytes.NewReader(secondData))
+	if err != nil {
+		t.Fatalf("second PutObject failed: %v", err)
+	}
+
+	// GetObject must now return the new content, not the cached first version.
+	reader2, info2, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("second GetObject failed: %v", err)
+	}
+	got2, _ := io.ReadAll(reader2)
+	reader2.Close()
+	if !bytes.Equal(got2, secondData) {
+		t.Errorf("second GetObject: got %q, want %q (stale cache not evicted)", got2, secondData)
+	}
+	if info2.Size == info1.Size {
+		t.Errorf("ObjectInfo.Size unchanged (%d); expected updated size after PutObject", info2.Size)
+	}
+
+	// HeadObject must also reflect the new state.
+	head, err := bucket.HeadObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("HeadObject failed: %v", err)
+	}
+	if head.Size != int64(len(secondData)) {
+		t.Errorf("HeadObject.Size = %d, want %d", head.Size, len(secondData))
+	}
+}
+
 // TestCacheTTLZeroDisablesExpiration tests that TTL=0 means entries never expire
 func TestCacheTTLZeroDisablesExpiration(t *testing.T) {
 	// Create a cache with TTL=0 (no expiration)
