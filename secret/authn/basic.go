@@ -54,12 +54,6 @@ func NewBasicAuthenticator[C BasicAuthCredential](loader Loader[C]) Authenticato
 	return NewAuthenticator(loader, NewBasicScheme[C]())
 }
 
-// NewStaticBasicTransport returns an http.RoundTripper that injects static
-// Basic Auth credentials into every outbound request that lacks an Authorization header.
-func NewStaticBasicTransport(username, password string, base http.RoundTripper) http.RoundTripper {
-	return NewBasicAuthTransport(Static(Basic{username, password}), "", "*", base)
-}
-
 // NewBasicAuthForwarder returns an http.RoundTripper that injects Basic Auth
 // credential from the context into outbound requests. If the context has no
 // credential or the request already has an Authorization header, requests pass
