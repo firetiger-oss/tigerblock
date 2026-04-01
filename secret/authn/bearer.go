@@ -71,12 +71,6 @@ func NewBearerAuthTransport[Credential BearerCredential](loader Loader[Credentia
 	return NewAuthTransport(loader, secretName, domain, transport, NewBearerScheme[Credential](""))
 }
 
-// NewStaticBearerTransport returns an http.RoundTripper that injects a static
-// Bearer token into every outbound request that lacks an Authorization header.
-func NewStaticBearerTransport(token string, base http.RoundTripper) http.RoundTripper {
-	return NewBearerAuthTransport(Static(Bearer(token)), "", "*", base)
-}
-
 func bearerToken(req *http.Request) (string, bool) {
 	auth := req.Header.Get("Authorization")
 	if auth == "" {
