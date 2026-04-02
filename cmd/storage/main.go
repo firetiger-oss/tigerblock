@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,6 +20,9 @@ import (
 	_ "github.com/firetiger-oss/storage/http"
 	_ "github.com/firetiger-oss/storage/memory"
 	_ "github.com/firetiger-oss/storage/s3"
+
+	basicauth "github.com/firetiger-oss/storage/secret/authn/basic"
+	bearerauth "github.com/firetiger-oss/storage/secret/authn/bearer"
 )
 
 var rootCmd = &cobra.Command{
@@ -33,6 +37,21 @@ func init() {
 	rootCmd.AddCommand(cpCmd)
 	rootCmd.AddCommand(rmCmd)
 	rootCmd.AddCommand(serveCmd)
+
+	rootCmd.PersistentFlags().String("basic-auth", "", "HTTP basic auth credentials in username:password format")
+	rootCmd.PersistentFlags().String("bearer-token", "", "HTTP bearer token for authentication")
+
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		basicAuth, _ := cmd.Flags().GetString("basic-auth")
+		bearerToken, _ := cmd.Flags().GetString("bearer-token")
+		if basicAuth != "" {
+			username, password, _ := strings.Cut(basicAuth, ":")
+			http.DefaultTransport = basicauth.NewTransport(http.DefaultTransport, username, password)
+		} else if bearerToken != "" {
+			http.DefaultTransport = bearerauth.NewTransport(http.DefaultTransport, bearerToken)
+		}
+		return nil
+	}
 }
 
 func main() {

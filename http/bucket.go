@@ -20,6 +20,8 @@ import (
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/internal/sequtil"
 	"github.com/firetiger-oss/storage/secret"
+	basicauth "github.com/firetiger-oss/storage/secret/authn/basic"
+	bearerauth "github.com/firetiger-oss/storage/secret/authn/bearer"
 	"github.com/firetiger-oss/storage/uri"
 )
 
@@ -68,6 +70,26 @@ func WithListType(listType string) BucketOption {
 
 func WithSigner(signer secret.Signer) BucketOption {
 	return func(b *Bucket) { b.signer = signer }
+}
+
+func WithBasicAuth(username, password string) BucketOption {
+	return func(b *Bucket) {
+		base := b.client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		b.client = &http.Client{Transport: basicauth.NewTransport(base, username, password)}
+	}
+}
+
+func WithBearerToken(token string) BucketOption {
+	return func(b *Bucket) {
+		base := b.client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		b.client = &http.Client{Transport: bearerauth.NewTransport(base, token)}
+	}
 }
 
 type Bucket struct {

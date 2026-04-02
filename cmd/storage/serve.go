@@ -29,6 +29,7 @@ func init() {
 	serveCmd.Flags().String("http", ":8184", "HTTP server address")
 	serveCmd.Flags().String("basic-auth-username", "", "Username for basic auth")
 	serveCmd.Flags().String("basic-auth-secret-id", "", "Secret store URI for basic auth credentials")
+	serveCmd.Flags().String("bearer-token-secret-id", "", "Secret store URI for bearer token auth")
 	serveCmd.Flags().String("presign-secret-id", "", "Secret ID for validating presigned URLs")
 }
 
@@ -61,6 +62,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	httpAddr, _ := cmd.Flags().GetString("http")
 	basicAuthUsername, _ := cmd.Flags().GetString("basic-auth-username")
 	basicAuthSecretID, _ := cmd.Flags().GetString("basic-auth-secret-id")
+	bearerTokenSecretID, _ := cmd.Flags().GetString("bearer-token-secret-id")
 	presignSecretID, _ := cmd.Flags().GetString("presign-secret-id")
 
 	bucket, err := storage.LoadBucket(ctx, bucketURI)
@@ -91,6 +93,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 				value, version, err := secret.Get(ctx, basicAuthSecretID, options...)
 				return secret.Value(basicAuthUsername + ":" + string(value)), version, err
 			})),
+		))
+	}
+
+	if bearerTokenSecretID != "" {
+		authenticators = append(authenticators, authn.NewBearerAuthenticator(
+			authn.NewLoader[authn.Bearer](secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
+				return secret.Get(ctx, bearerTokenSecretID, options...)
+			})),
+			"",
 		))
 	}
 
