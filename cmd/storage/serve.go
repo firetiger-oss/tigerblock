@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,27 +30,6 @@ func init() {
 	serveCmd.Flags().String("basic-auth-secret-id", "", "Secret store URI for basic auth credentials")
 	serveCmd.Flags().String("bearer-token-secret-id", "", "Secret store URI for bearer token auth")
 	serveCmd.Flags().String("presign-secret-id", "", "Secret ID for validating presigned URLs")
-}
-
-// basicAuthCredential stores a password for basic auth validation.
-type basicAuthCredential string
-
-func (c basicAuthCredential) String() string {
-	return secret.Value(c).String()
-}
-
-func (c basicAuthCredential) GoString() string {
-	return secret.Value(c).GoString()
-}
-
-func (c basicAuthCredential) Username() string {
-	username, _, _ := strings.Cut(string(c), ":")
-	return username
-}
-
-func (c basicAuthCredential) Password() string {
-	_, password, _ := strings.Cut(string(c), ":")
-	return password
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -86,21 +64,28 @@ func runServe(cmd *cobra.Command, args []string) error {
 		http.DefaultTransport = authn.NewBasicAuthForwarder(http.DefaultTransport)
 
 		authenticators = append(authenticators, authn.NewBasicAuthenticator(
-			authn.NewLoader[basicAuthCredential](secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
+			authn.LoaderFunc[authn.Basic](func(ctx context.Context, name string) (authn.Basic, error) {
 				if name != basicAuthUsername {
-					return nil, "", secret.ErrNotFound
+					return authn.Basic{}, secret.ErrNotFound
 				}
-				value, version, err := secret.Get(ctx, basicAuthSecretID, options...)
-				return secret.Value(basicAuthUsername + ":" + string(value)), version, err
-			})),
+				value, _, err := secret.Get(ctx, basicAuthSecretID)
+				if err != nil {
+					return authn.Basic{}, err
+				}
+				return authn.Basic{basicAuthUsername, string(value)}, nil
+			}),
 		))
 	}
 
 	if bearerTokenSecretID != "" {
 		authenticators = append(authenticators, authn.NewBearerAuthenticator(
-			authn.NewLoader[authn.Bearer](secret.ProviderFunc(func(ctx context.Context, name string, options ...secret.GetOption) (secret.Value, string, error) {
-				return secret.Get(ctx, bearerTokenSecretID, options...)
-			})),
+			authn.LoaderFunc[authn.Bearer](func(ctx context.Context, _ string) (authn.Bearer, error) {
+				value, _, err := secret.Get(ctx, bearerTokenSecretID)
+				if err != nil {
+					return "", err
+				}
+				return authn.Bearer(value), nil
+			}),
 			"",
 		))
 	}
