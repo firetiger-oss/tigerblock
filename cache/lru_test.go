@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -371,5 +372,52 @@ func TestLRUZeroLimit(t *testing.T) {
 	_, found := lru.Peek("key1")
 	if found {
 		t.Error("Nothing should be cached with zero limit")
+	}
+}
+
+func TestTTLLoadContextCancellation(t *testing.T) {
+	c := &TTL[string, string]{Limit: 100}
+
+	fetchStarted := make(chan struct{})
+	fetchBlock := make(chan struct{})
+
+	// Start a load that blocks until we release it.
+	go func() {
+		c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
+			close(fetchStarted)
+			<-fetchBlock
+			return 10, "value", time.Time{}, nil
+		})
+	}()
+
+	// Wait for the fetch goroutine to be in-flight.
+	<-fetchStarted
+
+	// A second caller with a canceled context should return promptly
+	// without waiting for the fetch to complete.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := c.Load(ctx, "key", time.Now(), false, func() (int64, string, time.Time, error) {
+		t.Error("fetch should not be called for a co-waiter")
+		return 0, "", time.Time{}, nil
+	})
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+
+	// Release the original fetch and verify the result is cached.
+	close(fetchBlock)
+	time.Sleep(10 * time.Millisecond)
+
+	v, _, err := c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
+		t.Error("fetch should not be called for a cached key")
+		return 0, "", time.Time{}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v != "value" {
+		t.Errorf("expected %q, got %q", "value", v)
 	}
 }

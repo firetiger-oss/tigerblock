@@ -1,6 +1,9 @@
 package cache
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type TTL[K comparable, V any] LRU[K, ttlEntry[V]]
 
@@ -25,7 +28,7 @@ func (c *TTL[K, V]) Drop(ks ...K) {
 	c.lru().Drop(ks...)
 }
 
-func (c *TTL[K, V]) Load(key K, now time.Time, update bool, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
+func (c *TTL[K, V]) Load(ctx context.Context, key K, now time.Time, update bool, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
 	var promise *Promise[ttlEntry[V]]
 
 	c.mutex.Lock()
@@ -42,7 +45,11 @@ func (c *TTL[K, V]) Load(key K, now time.Time, update bool, fetch func() (int64,
 	c.mutex.Unlock()
 
 	if promise != nil {
-		<-promise.ready
+		select {
+		case <-promise.ready:
+		case <-ctx.Done():
+			return value, expire, context.Cause(ctx)
+		}
 		if promise.error != nil {
 			return value, expire, promise.error
 		}

@@ -67,7 +67,7 @@ func (c *Cache) GetSecretValue(ctx context.Context, name string, options ...GetO
 	opts := NewGetOptions(options...)
 	key := cacheKey{name: name, version: opts.Version()}
 
-	entry, _, err := c.cache.Load(key, time.Now(), false, func() (int64, cacheEntry, time.Time, error) {
+	entry, _, err := c.cache.Load(ctx, key, time.Now(), false, func() (int64, cacheEntry, time.Time, error) {
 		value, version, err := c.provider.GetSecretValue(ctx, name, options...)
 		if err != nil {
 			return 0, cacheEntry{}, time.Time{}, err

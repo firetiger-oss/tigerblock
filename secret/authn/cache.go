@@ -49,7 +49,7 @@ func NewCachedLoader[C any](loader Loader[C], opts ...LoaderCacheOption[C]) *Cac
 
 func (c *CachedLoader[C]) Load(ctx context.Context, id string) (C, error) {
 	now := time.Now()
-	value, _, err := c.cache.Load(id, now, false, func() (int64, C, time.Time, error) {
+	value, _, err := c.cache.Load(ctx, id, now, false, func() (int64, C, time.Time, error) {
 		v, err := c.loader.Load(ctx, id)
 		if err != nil {
 			var zero C

@@ -152,7 +152,7 @@ func (c *cachedBucket) Create(ctx context.Context) error {
 }
 
 func (c *cachedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, error) {
-	info, _, err := c.infos.Load(key, time.Now(), false, func() (int64, ObjectInfo, time.Time, error) {
+	info, _, err := c.infos.Load(ctx, key, time.Now(), false, func() (int64, ObjectInfo, time.Time, error) {
 		object, err := c.bucket.HeadObject(ctx, key)
 		size := int64(0)
 		size += int64(len(key))
@@ -206,7 +206,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 				},
 
 				func(ctx context.Context, thisPageKey objectRange) (cachedObject, error) {
-					obj, _, err := c.pages.Load(thisPageKey, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
+					obj, _, err := c.pages.Load(ctx, thisPageKey, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
 						thisPageStart := int64(thisPageKey.page) * pageSize
 						thisPageEnd := thisPageStart + pageSize - 1
 						body, info, err := c.bucket.GetObject(ctx, thisPageKey.object,
@@ -272,7 +272,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		}
 	}
 
-	object, _, err = c.objects.Load(key, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
+	object, _, err = c.objects.Load(ctx, key, time.Now(), false, func() (int64, cachedObject, time.Time, error) {
 		var object cachedObject
 		reader, info, err := c.bucket.GetObject(ctx, key)
 		if err != nil {
