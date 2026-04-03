@@ -18,11 +18,7 @@ import (
 // Mount mounts bucket at dir. The returned server controls the lifecycle;
 // call server.Unmount() followed by server.Wait() to tear down.
 func Mount(dir string, bucket storage.Bucket, opts *gofs.Options) (*gofuse.Server, error) {
-	root := &dirNode{bucket: bucket}
-	if opts == nil {
-		opts = &gofs.Options{}
-	}
-	return gofs.Mount(dir, root, opts)
+	return gofs.Mount(dir, &dirNode{bucket: bucket}, opts)
 }
 
 // pathIno produces a stable inode number by hashing the full URI of the
