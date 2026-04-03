@@ -34,6 +34,10 @@ func (c *TTL[K, V]) Load(ctx context.Context, key K, now time.Time, update bool,
 	c.mutex.Lock()
 	entry, ok := c.cache.Lookup(key)
 	if !ok || update || (!entry.expire.IsZero() && now.After(entry.expire)) {
+		if err = ctx.Err(); err != nil {
+			c.mutex.Unlock()
+			return value, expire, context.Cause(ctx)
+		}
 		promise = c.lru().get(key, func() (int64, ttlEntry[V], error) {
 			size, value, expire, err := fetch()
 			if err != nil {
@@ -48,7 +52,13 @@ func (c *TTL[K, V]) Load(ctx context.Context, key K, now time.Time, update bool,
 		select {
 		case <-promise.ready:
 		case <-ctx.Done():
-			return value, expire, context.Cause(ctx)
+			// Prefer a completed result over a simultaneous cancellation to avoid
+			// turning near-deadline cache hits into flaky cancellations.
+			select {
+			case <-promise.ready:
+			default:
+				return value, expire, context.Cause(ctx)
+			}
 		}
 		if promise.error != nil {
 			return value, expire, promise.error
