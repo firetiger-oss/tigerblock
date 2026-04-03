@@ -47,15 +47,21 @@ func CacheTTL(ttl time.Duration) CacheOption {
 	return func(c *Cache) { c.ttl = ttl }
 }
 
+// CacheFetchContext configures the context used for shared cache refill work.
+func CacheFetchContext(fn cache.NewFetchContext) CacheOption {
+	return func(c *Cache) { c.cache.NewFetchContext = fn }
+}
+
 // NewCache creates a new Cache that wraps the given provider.
 //
 // By default, the cache size is 512 KiB and the TTL is 1 minute.
 func NewCache(provider Provider, options ...CacheOption) *Cache {
 	c := &Cache{
 		provider: provider,
-		cache:    cache.TTL[cacheKey, cacheEntry]{Limit: DefaultCacheSize},
+		cache:    cache.TTL[cacheKey, cacheEntry]{},
 		ttl:      DefaultCacheTTL,
 	}
+	c.cache.Limit = DefaultCacheSize
 	for _, opt := range options {
 		opt(c)
 	}
@@ -67,8 +73,8 @@ func (c *Cache) GetSecretValue(ctx context.Context, name string, options ...GetO
 	opts := NewGetOptions(options...)
 	key := cacheKey{name: name, version: opts.Version()}
 
-	entry, _, err := c.cache.Load(ctx, key, time.Now(), false, func() (int64, cacheEntry, time.Time, error) {
-		value, version, err := c.provider.GetSecretValue(ctx, name, options...)
+	entry, _, err := c.cache.Load(ctx, key, time.Now(), false, func(fetchCtx context.Context) (int64, cacheEntry, time.Time, error) {
+		value, version, err := c.provider.GetSecretValue(fetchCtx, name, options...)
 		if err != nil {
 			return 0, cacheEntry{}, time.Time{}, err
 		}

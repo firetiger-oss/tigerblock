@@ -34,13 +34,18 @@ func WithLoaderSizeFunc[C any](fn func(C) int64) LoaderCacheOption[C] {
 	return func(c *CachedLoader[C]) { c.size = fn }
 }
 
+func WithLoaderFetchContext[C any](fn cache.NewFetchContext) LoaderCacheOption[C] {
+	return func(c *CachedLoader[C]) { c.cache.NewFetchContext = fn }
+}
+
 func NewCachedLoader[C any](loader Loader[C], opts ...LoaderCacheOption[C]) *CachedLoader[C] {
 	c := &CachedLoader[C]{
 		loader: loader,
-		cache:  cache.TTL[string, C]{Limit: DefaultLoaderCacheSize},
+		cache:  cache.TTL[string, C]{},
 		ttl:    DefaultLoaderCacheTTL,
 		size:   func(C) int64 { return 0 },
 	}
+	c.cache.Limit = DefaultLoaderCacheSize
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -49,8 +54,8 @@ func NewCachedLoader[C any](loader Loader[C], opts ...LoaderCacheOption[C]) *Cac
 
 func (c *CachedLoader[C]) Load(ctx context.Context, id string) (C, error) {
 	now := time.Now()
-	value, _, err := c.cache.Load(ctx, id, now, false, func() (int64, C, time.Time, error) {
-		v, err := c.loader.Load(ctx, id)
+	value, _, err := c.cache.Load(ctx, id, now, false, func(fetchCtx context.Context) (int64, C, time.Time, error) {
+		v, err := c.loader.Load(fetchCtx, id)
 		if err != nil {
 			var zero C
 			return 0, zero, time.Time{}, err

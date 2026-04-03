@@ -376,14 +376,15 @@ func TestLRUZeroLimit(t *testing.T) {
 }
 
 func TestTTLLoadContextCancellation(t *testing.T) {
-	c := &TTL[string, string]{Limit: 100}
+	c := &TTL[string, string]{}
+	c.Limit = 100
 
 	fetchStarted := make(chan struct{})
 	fetchBlock := make(chan struct{})
 
 	// Start a load that blocks until we release it.
 	go func() {
-		c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
+		c.Load(context.Background(), "key", time.Now(), false, func(context.Context) (int64, string, time.Time, error) {
 			close(fetchStarted)
 			<-fetchBlock
 			return 10, "value", time.Time{}, nil
@@ -398,7 +399,7 @@ func TestTTLLoadContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := c.Load(ctx, "key", time.Now(), false, func() (int64, string, time.Time, error) {
+	_, _, err := c.Load(ctx, "key", time.Now(), false, func(context.Context) (int64, string, time.Time, error) {
 		t.Error("fetch should not be called for a co-waiter")
 		return 0, "", time.Time{}, nil
 	})
@@ -410,7 +411,7 @@ func TestTTLLoadContextCancellation(t *testing.T) {
 	close(fetchBlock)
 	time.Sleep(10 * time.Millisecond)
 
-	v, _, err := c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
+	v, _, err := c.Load(context.Background(), "key", time.Now(), false, func(context.Context) (int64, string, time.Time, error) {
 		t.Error("fetch should not be called for a cached key")
 		return 0, "", time.Time{}, nil
 	})
@@ -426,12 +427,13 @@ func TestTTLLoadContextCancellation(t *testing.T) {
 // already-canceled context on a cache miss returns immediately without
 // invoking fetch or populating the cache.
 func TestTTLLoadAlreadyCanceledCacheMiss(t *testing.T) {
-	c := &TTL[string, string]{Limit: 100}
+	c := &TTL[string, string]{}
+	c.Limit = 100
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := c.Load(ctx, "key", time.Now(), false, func() (int64, string, time.Time, error) {
+	_, _, err := c.Load(ctx, "key", time.Now(), false, func(context.Context) (int64, string, time.Time, error) {
 		t.Error("fetch must not be called with an already-canceled context")
 		return 0, "", time.Time{}, nil
 	})
@@ -440,7 +442,7 @@ func TestTTLLoadAlreadyCanceledCacheMiss(t *testing.T) {
 	}
 
 	// Nothing should have been stored in the cache.
-	_, _, err = c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
+	_, _, err = c.Load(context.Background(), "key", time.Now(), false, func(context.Context) (int64, string, time.Time, error) {
 		return 10, "value", time.Time{}, nil
 	})
 	if err != nil {
@@ -448,52 +450,66 @@ func TestTTLLoadAlreadyCanceledCacheMiss(t *testing.T) {
 	}
 }
 
-// TestTTLLoadReadyBeatsCancel verifies that when the shared fetch completes
-// at the same time the waiting context is canceled, the completed result is
-// returned rather than a cancellation error.
-func TestTTLLoadReadyBeatsCancel(t *testing.T) {
-	const iterations = 1000
+func TestTTLLoadUsesConfiguredFetchContext(t *testing.T) {
+	c := &TTL[string, string]{}
+	c.Limit = 100
 
-	for i := range iterations {
-		c := &TTL[string, string]{Limit: 100}
+	type contextKey string
 
-		fetchDone := make(chan struct{})
-		fetchBlock := make(chan struct{})
-
-		// Goroutine that owns the fetch.
-		go func() {
-			c.Load(context.Background(), "key", time.Now(), false, func() (int64, string, time.Time, error) {
-				<-fetchBlock
-				return 10, "value", time.Time{}, nil
-			})
-			close(fetchDone)
-		}()
-
-		ctx, cancel := context.WithCancel(context.Background())
-
-		// Second caller waits on the same promise.
-		resultCh := make(chan error, 1)
-		go func() {
-			// Deliberately don't wait for fetchStarted so this goroutine may
-			// reach the select before or after the fetch completes.
-			_, _, err := c.Load(ctx, "key", time.Now(), false, func() (int64, string, time.Time, error) {
-				t.Error("fetch must not be called for co-waiter")
-				return 0, "", time.Time{}, nil
-			})
-			resultCh <- err
-		}()
-
-		// Unblock the fetch and cancel the waiter's context simultaneously.
-		close(fetchBlock)
-		cancel()
-
-		<-fetchDone
-		err := <-resultCh
-
-		// The result must be either success (fetch won) or cancellation (cancel
-		// won before the result was ready). It must never be any other error.
-		if err != nil && err != context.Canceled {
-			t.Errorf("iteration %d: unexpected error %v", i, err)
+	fetchCanceled := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	c.NewFetchContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey("source"), "cache"))
+		return ctx, func() {
+			cancel()
+			close(cancelCalled)
 		}
+	}
+
+	waitCtx, waitCancel := context.WithCancel(context.Background())
+	fetchStarted := make(chan struct{})
+	fetchRelease := make(chan struct{})
+
+	go func() {
+		_, _, _ = c.Load(waitCtx, "key", time.Now(), false, func(fetchCtx context.Context) (int64, string, time.Time, error) {
+			if got := fetchCtx.Value(contextKey("source")); got != "cache" {
+				t.Errorf("expected configured fetch context value, got %v", got)
+			}
+			close(fetchStarted)
+			waitCancel()
+			select {
+			case <-fetchCtx.Done():
+				close(fetchCanceled)
+			case <-fetchRelease:
+			}
+			return 10, "value", time.Time{}, nil
+		})
+	}()
+
+	<-fetchStarted
+	select {
+	case <-fetchCanceled:
+		t.Fatal("fetch context should not be canceled when the waiter is canceled")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(fetchRelease)
+
+	select {
+	case <-cancelCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected configured fetch context cancel function to be called")
+	}
+}
+
+func TestWaitForPromiseReadyBeatsCanceledWaiter(t *testing.T) {
+	ready := make(chan struct{})
+	close(ready)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitForPromise(ctx, &Promise[string]{ready: ready, value: "value"})
+	if err != nil {
+		t.Fatalf("expected completed shared result, got error %v", err)
 	}
 }
