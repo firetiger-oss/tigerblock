@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -671,4 +672,68 @@ func (b *sizeLyingBucket) GetObject(ctx context.Context, key string, options ...
 		}
 	}
 	return io.NopCloser(strings.NewReader(body)), b.info, nil
+}
+
+// TestCacheConcurrentWritesInFlight verifies that concurrent GetObject calls do not
+// exhaust the cache directory beyond its configured size limit. With the inFlight
+// counter, each goroutine accounts for peers' in-progress writes before touching
+// disk, so committed + in-flight bytes stay bounded even under high concurrency.
+func TestCacheConcurrentWritesInFlight(t *testing.T) {
+	const (
+		goroutines  = 50
+		objectSize  = 1024 // 1 KiB per object
+		cacheLimit  = 4 * objectSize
+		cacheObject = "public, max-age=3600"
+	)
+
+	store := t.TempDir()
+	cacheDir := t.TempDir()
+	ctx := t.Context()
+
+	// Populate the underlying store with goroutines distinct objects.
+	underlying, err := NewRegistry(store).LoadBucket(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < goroutines; i++ {
+		key := strings.Repeat("k", i+1)
+		val := strings.Repeat("v", objectSize)
+		if _, err := underlying.PutObject(ctx, key, strings.NewReader(val), storage.CacheControl(cacheObject)); err != nil {
+			t.Fatalf("put key %q: %v", key, err)
+		}
+	}
+
+	// Cache sized to hold at most ~4 objects at once.
+	cache := NewCache(cacheDir, cacheLimit)
+	bucket := cache.AdaptBucket(underlying)
+
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := strings.Repeat("k", i+1)
+			r, _, err := bucket.GetObject(ctx, key)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			_, errs[i] = io.Copy(io.Discard, r)
+			r.Close()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+
+	// The committed cache size must not exceed the configured limit.
+	stat := cache.Stat()
+	if stat.Size > stat.Limit {
+		t.Errorf("cache size %d exceeds limit %d after concurrent writes", stat.Size, stat.Limit)
+	}
 }
