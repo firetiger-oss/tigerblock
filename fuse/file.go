@@ -91,7 +91,7 @@ func (f *fileNode) Setattr(ctx context.Context, fh gofs.FileHandle, in *gofuse.S
 // shrinking (keeping only the first size bytes) and extending (zero-filling the
 // remainder). Called from Setattr when there is no open write handle.
 func (f *fileNode) truncateRemote(ctx context.Context, size int64) syscall.Errno {
-	tmp, err := os.CreateTemp("", "storage-fuse-truncate-*")
+	tmp, err := os.CreateTemp("", ".fuse.*")
 	if err != nil {
 		return syscall.EIO
 	}

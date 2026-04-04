@@ -56,7 +56,7 @@ var _ gofs.FileReleaser = (*writeHandle)(nil)
 // downloaded into the temp file first so that reads and partial writes are
 // consistent.
 func newWriteHandle(ctx context.Context, bucket storage.Bucket, key string, flags uint32) (*writeHandle, error) {
-	tmp, err := os.CreateTemp("", "storage-fuse-*")
+	tmp, err := os.CreateTemp("", ".fuse.*")
 	if err != nil {
 		return nil, err
 	}
