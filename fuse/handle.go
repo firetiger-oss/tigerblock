@@ -26,7 +26,7 @@ func (h *readHandle) Read(ctx context.Context, dest []byte, off int64) (gofuse.R
 	end := off + int64(len(dest)) - 1
 	rc, _, err := h.bucket.GetObject(ctx, h.key, storage.BytesRange(off, end))
 	if err != nil {
-		return nil, storageErr(err)
+		return nil, makeErrno(err)
 	}
 	defer rc.Close()
 	n, err := io.ReadFull(rc, dest)
@@ -115,7 +115,7 @@ func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
 		return syscall.EIO
 	}
 	if _, err := h.bucket.PutObject(ctx, h.key, h.tmp); err != nil {
-		return storageErr(err)
+		return makeErrno(err)
 	}
 	h.dirty = false
 	return gofs.OK

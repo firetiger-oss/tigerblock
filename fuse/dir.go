@@ -34,8 +34,8 @@ func (d *dirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		fillFileAttr(&out.Attr, info)
 		return child, gofs.OK
 	}
-	if storageErr(err) != syscall.ENOENT {
-		return nil, storageErr(err)
+	if makeErrno(err) != syscall.ENOENT {
+		return nil, makeErrno(err)
 	}
 
 	// Not a file. Check whether it's a virtual directory by probing for any
@@ -47,7 +47,7 @@ func (d *dirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		storage.MaxKeys(1),
 	) {
 		if listErr != nil {
-			return nil, storageErr(listErr)
+			return nil, makeErrno(listErr)
 		}
 		found = true
 		break
@@ -67,7 +67,7 @@ func (d *dirNode) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) {
 	var entries []gofuse.DirEntry
 	for obj, err := range d.bucket.ListObjects(ctx, storage.KeyDelimiter("/")) {
 		if err != nil {
-			return nil, storageErr(err)
+			return nil, makeErrno(err)
 		}
 		name := obj.Key
 		if name, ok := strings.CutSuffix(name, "/"); ok {
@@ -96,7 +96,7 @@ func (d *dirNode) Getattr(ctx context.Context, fh gofs.FileHandle, out *gofuse.A
 func (d *dirNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *gofuse.EntryOut) (*gofs.Inode, gofs.FileHandle, uint32, syscall.Errno) {
 	wh, err := newWriteHandle(ctx, d.bucket, name, flags|syscall.O_CREAT|syscall.O_TRUNC)
 	if err != nil {
-		return nil, nil, 0, storageErr(err)
+		return nil, nil, 0, makeErrno(err)
 	}
 	node := &fileNode{bucket: d.bucket, key: name}
 	child := d.NewInode(ctx, node, gofs.StableAttr{Mode: syscall.S_IFREG, Ino: pathIno(d.bucket, name)})
@@ -105,5 +105,5 @@ func (d *dirNode) Create(ctx context.Context, name string, flags uint32, mode ui
 }
 
 func (d *dirNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	return storageErr(d.bucket.DeleteObject(ctx, name))
+	return makeErrno(d.bucket.DeleteObject(ctx, name))
 }

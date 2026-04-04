@@ -33,7 +33,7 @@ var _ gofs.NodeSetattrer = (*fileNode)(nil)
 func (f *fileNode) Getattr(ctx context.Context, fh gofs.FileHandle, out *gofuse.AttrOut) syscall.Errno {
 	info, err := f.bucket.HeadObject(ctx, f.key)
 	if err != nil {
-		return storageErr(err)
+		return makeErrno(err)
 	}
 	f.mu.Lock()
 	f.info = info
@@ -48,7 +48,7 @@ func (f *fileNode) Open(ctx context.Context, flags uint32) (gofs.FileHandle, uin
 	}
 	wh, err := newWriteHandle(ctx, f.bucket, f.key, flags)
 	if err != nil {
-		return nil, 0, storageErr(err)
+		return nil, 0, makeErrno(err)
 	}
 	return wh, gofuse.FOPEN_DIRECT_IO, gofs.OK
 }
@@ -59,7 +59,7 @@ func (f *fileNode) Setattr(ctx context.Context, fh gofs.FileHandle, in *gofuse.S
 			// Route all truncations through the write handle so the temp file
 			// stays consistent and dirty is set appropriately.
 			if err := wh.truncate(int64(size)); err != nil {
-				return storageErr(err)
+				return makeErrno(err)
 			}
 			f.mu.Lock()
 			f.info.Size = int64(size)
@@ -67,7 +67,7 @@ func (f *fileNode) Setattr(ctx context.Context, fh gofs.FileHandle, in *gofuse.S
 		} else if size == 0 {
 			// No open write handle — update bucket directly.
 			if _, err := f.bucket.PutObject(ctx, f.key, bytes.NewReader(nil)); err != nil {
-				return storageErr(err)
+				return makeErrno(err)
 			}
 		} else {
 			// No open write handle, size > 0: download, resize, and re-upload.
@@ -82,7 +82,7 @@ func (f *fileNode) Setattr(ctx context.Context, fh gofs.FileHandle, in *gofuse.S
 	if fh == nil {
 		info, err := f.bucket.HeadObject(ctx, f.key)
 		if err != nil {
-			return storageErr(err)
+			return makeErrno(err)
 		}
 		f.mu.Lock()
 		f.info = info
@@ -111,7 +111,7 @@ func (f *fileNode) truncateRemote(ctx context.Context, size int64) syscall.Errno
 
 	rc, info, err := f.bucket.GetObject(ctx, f.key)
 	if err != nil {
-		return storageErr(err)
+		return makeErrno(err)
 	}
 	// Copy at most size bytes. io.EOF means the source was shorter than size;
 	// the remainder will be zero-filled by Truncate below.
@@ -130,7 +130,7 @@ func (f *fileNode) truncateRemote(ctx context.Context, size int64) syscall.Errno
 	}
 
 	if _, err := f.bucket.PutObject(ctx, f.key, tmp, objectInfoToPutOptions(info)...); err != nil {
-		return storageErr(err)
+		return makeErrno(err)
 	}
 	return gofs.OK
 }

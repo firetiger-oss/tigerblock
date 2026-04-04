@@ -9,7 +9,7 @@ import (
 	storage "github.com/firetiger-oss/storage"
 )
 
-func storageErr(err error) syscall.Errno {
+func makeErrno(err error) syscall.Errno {
 	switch {
 	case err == nil:
 		return gofs.OK
