@@ -28,6 +28,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: install fuse
+        if: matrix.os == 'ubuntu'
+        run: sudo apt-get install -y fuse
+
       - name: fmt
         run: test -z $(gofmt -l . | head -n 1) || ( gofmt -d . ; exit 1 )
 
