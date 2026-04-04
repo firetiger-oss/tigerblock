@@ -584,13 +584,16 @@ func TestLargeFile(t *testing.T) {
 	}
 }
 
-// TestUnlinkNonExistent verifies that removing a key that never existed
-// succeeds (idempotent delete).
+// TestUnlinkNonExistent verifies that removing a path that does not exist
+// returns os.ErrNotExist, consistent with POSIX unlink semantics. Our Unlink
+// handler is idempotent, but the kernel's Lookup returns ENOENT before Unlink
+// is ever reached for truly missing paths.
 func TestUnlinkNonExistent(t *testing.T) {
 	bucket := newBucket(t)
 	dir := mountBucket(t, bucket)
 
-	if err := os.Remove(filepath.Join(dir, "ghost.txt")); err != nil {
-		t.Fatalf("expected nil, got %v", err)
+	err := os.Remove(filepath.Join(dir, "ghost.txt"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
 	}
 }

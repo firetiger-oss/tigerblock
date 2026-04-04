@@ -58,14 +58,20 @@ func (f *fileNode) Setattr(ctx context.Context, fh gofs.FileHandle, in *gofuse.S
 			if err := wh.truncate(int64(size)); err != nil {
 				return storageErr(err)
 			}
+			f.info.Size = int64(size)
 		}
 	}
-	info, err := f.bucket.HeadObject(ctx, f.key)
-	if err != nil {
-		return storageErr(err)
+	// Update f.info from the bucket only when no write handle is open (i.e. the
+	// object exists in the bucket). When a write handle is open the object may
+	// not be in the bucket yet, so we use the locally tracked f.info instead.
+	if fh == nil {
+		info, err := f.bucket.HeadObject(ctx, f.key)
+		if err != nil {
+			return storageErr(err)
+		}
+		f.info = info
 	}
-	f.info = info
-	fillFileAttr(&out.Attr, info)
+	fillFileAttr(&out.Attr, f.info)
 	return gofs.OK
 }
 
