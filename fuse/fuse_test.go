@@ -629,6 +629,177 @@ func TestTruncateExtendNoHandle(t *testing.T) {
 	}
 }
 
+// TestTruncateShrinkExactSize verifies that truncating a file to its current
+// size is a no-op: content is unchanged and no error is returned.
+func TestTruncateShrinkExactSize(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello"))
+	dir := mountBucket(t, bucket)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 5); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte("hello"); !bytes.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestTruncateRemoteGetObjectError verifies that a GetObject error in
+// truncateRemote (no open fd, size > 0) propagates to the os.Truncate caller.
+func TestTruncateRemoteGetObjectError(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello world"))
+	eb := &errorBucket{Bucket: bucket, getErr: storage.ErrTooManyRequests}
+	dir := mountBucket(t, eb)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 5); err == nil {
+		t.Fatal("expected error from Truncate when GetObject fails, got nil")
+	}
+}
+
+// TestTruncateRemotePutObjectError verifies that a PutObject error in
+// truncateRemote propagates to the os.Truncate caller.
+func TestTruncateRemotePutObjectError(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello world"))
+	eb := &errorBucket{Bucket: bucket, putErr: storage.ErrBucketReadOnly}
+	dir := mountBucket(t, eb)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 5); err == nil {
+		t.Fatal("expected error from Truncate when PutObject fails, got nil")
+	}
+}
+
+// TestTruncateRemotePreservesMetadata verifies that truncateRemote preserves
+// ContentType, CacheControl, and custom metadata on re-upload.
+func TestTruncateRemotePreservesMetadata(t *testing.T) {
+	bucket := newBucket(t)
+	if _, err := bucket.PutObject(t.Context(), "foo.txt",
+		bytes.NewReader([]byte("hello world")),
+		storage.ContentType("text/plain"),
+		storage.CacheControl("no-cache"),
+		storage.Metadata("x-custom", "preserved"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	dir := mountBucket(t, bucket)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 5); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify content was truncated.
+	got, err := os.ReadFile(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte("hello"); !bytes.Equal(got, want) {
+		t.Fatalf("content: got %q, want %q", got, want)
+	}
+
+	// Verify metadata survived the re-upload.
+	info, err := bucket.HeadObject(t.Context(), "foo.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ContentType != "text/plain" {
+		t.Errorf("ContentType: got %q, want %q", info.ContentType, "text/plain")
+	}
+	if info.CacheControl != "no-cache" {
+		t.Errorf("CacheControl: got %q, want %q", info.CacheControl, "no-cache")
+	}
+	if info.Metadata["x-custom"] != "preserved" {
+		t.Errorf("Metadata[x-custom]: got %q, want %q", info.Metadata["x-custom"], "preserved")
+	}
+}
+
+// TestConcurrentGetattr exercises concurrent Stat calls on the same file.
+// Under -race this catches data races on fileNode.info.
+func TestConcurrentGetattr(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello"))
+	dir := mountBucket(t, bucket)
+
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	sizes := make([]int64, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			fi, err := os.Stat(filepath.Join(dir, "foo.txt"))
+			errs[i] = err
+			if fi != nil {
+				sizes[i] = fi.Size()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d stat: %v", i, err)
+		}
+		if sizes[i] != 5 {
+			t.Errorf("goroutine %d size: got %d, want 5", i, sizes[i])
+		}
+	}
+}
+
+// TestConcurrentGetattrAndTruncate runs concurrent Stat and Truncate calls on
+// the same file. Under -race this catches write-lock contention on fileNode.info.
+func TestConcurrentGetattrAndTruncate(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello world"))
+	dir := mountBucket(t, bucket)
+
+	var wg sync.WaitGroup
+
+	// One writer: truncate to 5 bytes.
+	wg.Add(1)
+	var truncErr error
+	go func() {
+		defer wg.Done()
+		truncErr = os.Truncate(filepath.Join(dir, "foo.txt"), 5)
+	}()
+
+	// Several readers: stat concurrently with the truncate.
+	const n = 10
+	statErrs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, statErrs[i] = os.Stat(filepath.Join(dir, "foo.txt"))
+		}(i)
+	}
+	wg.Wait()
+
+	if truncErr != nil {
+		t.Fatalf("truncate: %v", truncErr)
+	}
+	for i, err := range statErrs {
+		if err != nil {
+			t.Errorf("stat goroutine %d: %v", i, err)
+		}
+	}
+
+	// After the truncate completes the file must be 5 bytes.
+	fi, err := os.Stat(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() != 5 {
+		t.Fatalf("expected size 5 after truncate, got %d", fi.Size())
+	}
+}
+
 // TestUnlinkNonExistent verifies that removing a path that does not exist
 // returns os.ErrNotExist, consistent with POSIX unlink semantics. Our Unlink
 // handler is idempotent, but the kernel's Lookup returns ENOENT before Unlink
