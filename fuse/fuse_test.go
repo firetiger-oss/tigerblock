@@ -588,6 +588,47 @@ func TestLargeFile(t *testing.T) {
 	}
 }
 
+// TestTruncateShrinkNoHandle verifies that truncate(2) without an open fd
+// shrinks the object: only the first N bytes are kept.
+func TestTruncateShrinkNoHandle(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello world"))
+	dir := mountBucket(t, bucket)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 5); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte("hello"); !bytes.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestTruncateExtendNoHandle verifies that truncate(2) without an open fd
+// extends the object with NUL bytes when size > current file size.
+func TestTruncateExtendNoHandle(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hello"))
+	dir := mountBucket(t, bucket)
+
+	if err := os.Truncate(filepath.Join(dir, "foo.txt"), 10); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append([]byte("hello"), make([]byte, 5)...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // TestUnlinkNonExistent verifies that removing a path that does not exist
 // returns os.ErrNotExist, consistent with POSIX unlink semantics. Our Unlink
 // handler is idempotent, but the kernel's Lookup returns ENOENT before Unlink
