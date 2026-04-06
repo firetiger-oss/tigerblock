@@ -1,7 +1,11 @@
 package storage_test
 
 import (
+	"bytes"
+	"io"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/firetiger-oss/storage"
 )
@@ -165,6 +169,95 @@ func TestPutOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestPutOptionsContentLength(t *testing.T) {
+	tests := []struct {
+		scenario string
+		reader   func() io.Reader
+		options  []storage.PutOption
+		want     int64
+	}{
+		{
+			scenario: "explicit option takes precedence",
+			reader: func() io.Reader {
+				return strings.NewReader("hello")
+			},
+			options: []storage.PutOption{
+				storage.ContentLength(99),
+			},
+			want: 99,
+		},
+
+		{
+			scenario: "ContentLength() int64 interface",
+			reader: func() io.Reader {
+				return &contentLengthReader{size: 1<<32 + 1}
+			},
+			want: 1<<32 + 1,
+		},
+
+		{
+			scenario: "Len() int interface (bytes.Buffer)",
+			reader: func() io.Reader {
+				return bytes.NewBufferString("hello world")
+			},
+			want: 11,
+		},
+
+		{
+			scenario: "Len() int interface (strings.Reader)",
+			reader: func() io.Reader {
+				return strings.NewReader("hello")
+			},
+			want: 5,
+		},
+
+		{
+			scenario: "ContentLength() int64 takes precedence over Len() int",
+			reader: func() io.Reader {
+				return &contentLengthAndLenReader{contentLength: 1<<32 + 1, len: 5}
+			},
+			want: 1<<32 + 1,
+		},
+
+		{
+			scenario: "unknown reader returns -1",
+			reader: func() io.Reader {
+				return iotest.NewReadLogger("", strings.NewReader("hello"))
+			},
+			want: -1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.scenario, func(t *testing.T) {
+			options := storage.NewPutOptions(test.options...)
+			got, err := options.ContentLength(test.reader())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Errorf("unexpected content length: %d != %d", got, test.want)
+			}
+		})
+	}
+}
+
+type contentLengthReader struct {
+	size int64
+}
+
+func (r *contentLengthReader) Read(p []byte) (int, error) { return 0, io.EOF }
+func (r *contentLengthReader) ContentLength() int64       { return r.size }
+
+type contentLengthAndLenReader struct {
+	contentLength int64
+	len           int
+}
+
+func (r *contentLengthAndLenReader) Read(p []byte) (int, error) { return 0, io.EOF }
+func (r *contentLengthAndLenReader) ContentLength() int64       { return r.contentLength }
+func (r *contentLengthAndLenReader) Len() int                   { return r.len }
 
 func TestListOptions(t *testing.T) {
 	tests := []struct {
