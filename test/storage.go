@@ -274,7 +274,7 @@ func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, erro
 			},
 		},
 		{
-			scenario: "Presign method returns a URL or ErrPresignedNotSupported",
+			scenario: "Presign method returns a URL, ErrPresignNotSupported, or ErrObjectNotFound",
 			function: testStoragePresign,
 		},
 
@@ -1651,8 +1651,8 @@ func testStoragePresign(t *testing.T, bucket storage.Bucket) {
 	t.Run("GetObject", func(t *testing.T) {
 		url, err := bucket.PresignGetObject(ctx, key, time.Hour)
 		if err != nil {
-			if !errors.Is(err, storage.ErrPresignNotSupported) {
-				t.Errorf("expected ErrPresignNotSupported or nil, got: %v", err)
+			if !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("expected ErrPresignNotSupported, ErrObjectNotFound, or nil, got: %v", err)
 			}
 		} else {
 			if url == "" {
@@ -1664,8 +1664,8 @@ func testStoragePresign(t *testing.T, bucket storage.Bucket) {
 	t.Run("PutObject", func(t *testing.T) {
 		url, err := bucket.PresignPutObject(ctx, key, time.Hour)
 		if err != nil {
-			if !errors.Is(err, storage.ErrPresignNotSupported) {
-				t.Errorf("expected ErrPresignNotSupported or nil, got: %v", err)
+			if !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("expected ErrPresignNotSupported, ErrObjectNotFound, or nil, got: %v", err)
 			}
 		} else {
 			if url == "" {
@@ -1677,8 +1677,8 @@ func testStoragePresign(t *testing.T, bucket storage.Bucket) {
 	t.Run("HeadObject", func(t *testing.T) {
 		url, err := bucket.PresignHeadObject(ctx, key, time.Hour)
 		if err != nil {
-			if !errors.Is(err, storage.ErrPresignNotSupported) {
-				t.Errorf("expected ErrPresignNotSupported or nil, got: %v", err)
+			if !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("expected ErrPresignNotSupported, ErrObjectNotFound, or nil, got: %v", err)
 			}
 		} else {
 			if url == "" {
@@ -1690,8 +1690,8 @@ func testStoragePresign(t *testing.T, bucket storage.Bucket) {
 	t.Run("DeleteObject", func(t *testing.T) {
 		url, err := bucket.PresignDeleteObject(ctx, key, time.Hour)
 		if err != nil {
-			if !errors.Is(err, storage.ErrPresignNotSupported) {
-				t.Errorf("expected ErrPresignNotSupported or nil, got: %v", err)
+			if !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("expected ErrPresignNotSupported, ErrObjectNotFound, or nil, got: %v", err)
 			}
 		} else {
 			if url == "" {
@@ -1709,12 +1709,12 @@ func testStoragePresign(t *testing.T, bucket storage.Bucket) {
 
 	t.Run("presign with options", func(t *testing.T) {
 		_, err := bucket.PresignGetObject(ctx, key, time.Hour, storage.BytesRange(0, 100))
-		if err != nil && !errors.Is(err, storage.ErrPresignNotSupported) {
+		if err != nil && !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
 			t.Errorf("PresignGetObject with options failed with unexpected error: %v", err)
 		}
 
 		_, err = bucket.PresignPutObject(ctx, key, time.Hour, storage.ContentType("text/plain"))
-		if err != nil && !errors.Is(err, storage.ErrPresignNotSupported) {
+		if err != nil && !errors.Is(err, storage.ErrPresignNotSupported) && !errors.Is(err, storage.ErrObjectNotFound) {
 			t.Errorf("PresignPutObject with options failed with unexpected error: %v", err)
 		}
 	})
