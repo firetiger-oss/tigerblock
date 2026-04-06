@@ -39,7 +39,7 @@ func newMockClient() *mockClient {
 
 func (m *mockClient) CreateSecret(ctx context.Context, params *secretsmanager.CreateSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -76,7 +76,7 @@ func (m *mockClient) CreateSecret(ctx context.Context, params *secretsmanager.Cr
 
 func (m *mockClient) GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()
@@ -122,7 +122,7 @@ func (m *mockClient) GetSecretValue(ctx context.Context, params *secretsmanager.
 
 func (m *mockClient) DescribeSecret(ctx context.Context, params *secretsmanager.DescribeSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.DescribeSecretOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()
@@ -145,7 +145,7 @@ func (m *mockClient) DescribeSecret(ctx context.Context, params *secretsmanager.
 
 func (m *mockClient) PutSecretValue(ctx context.Context, params *secretsmanager.PutSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.PutSecretValueOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -180,7 +180,7 @@ func (m *mockClient) PutSecretValue(ctx context.Context, params *secretsmanager.
 
 func (m *mockClient) UpdateSecret(ctx context.Context, params *secretsmanager.UpdateSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.UpdateSecretOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -204,7 +204,7 @@ func (m *mockClient) UpdateSecret(ctx context.Context, params *secretsmanager.Up
 
 func (m *mockClient) DeleteSecret(ctx context.Context, params *secretsmanager.DeleteSecretInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.DeleteSecretOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -218,7 +218,7 @@ func (m *mockClient) DeleteSecret(ctx context.Context, params *secretsmanager.De
 
 func (m *mockClient) ListSecrets(ctx context.Context, params *secretsmanager.ListSecretsInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretsOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()
@@ -303,7 +303,7 @@ secretLoop:
 
 func (m *mockClient) ListSecretVersionIds(ctx context.Context, params *secretsmanager.ListSecretVersionIdsInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.ListSecretVersionIdsOutput, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()

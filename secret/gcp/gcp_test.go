@@ -47,7 +47,7 @@ func newMockClient(projectID string) *mockClient {
 
 func (m *mockClient) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateSecretRequest, opts ...gax.CallOption) (*secretmanagerpb.Secret, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -76,7 +76,7 @@ func (m *mockClient) CreateSecret(ctx context.Context, req *secretmanagerpb.Crea
 
 func (m *mockClient) AddSecretVersion(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest, opts ...gax.CallOption) (*secretmanagerpb.SecretVersion, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -118,7 +118,7 @@ func (m *mockClient) AddSecretVersion(ctx context.Context, req *secretmanagerpb.
 
 func (m *mockClient) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.AccessSecretVersionRequest, opts ...gax.CallOption) (*secretmanagerpb.AccessSecretVersionResponse, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()
@@ -177,7 +177,7 @@ func (m *mockClient) AccessSecretVersion(ctx context.Context, req *secretmanager
 
 func (m *mockClient) GetSecret(ctx context.Context, req *secretmanagerpb.GetSecretRequest, opts ...gax.CallOption) (*secretmanagerpb.Secret, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.RLock()
@@ -198,7 +198,7 @@ func (m *mockClient) GetSecret(ctx context.Context, req *secretmanagerpb.GetSecr
 
 func (m *mockClient) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateSecretRequest, opts ...gax.CallOption) (*secretmanagerpb.Secret, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -223,7 +223,7 @@ func (m *mockClient) UpdateSecret(ctx context.Context, req *secretmanagerpb.Upda
 
 func (m *mockClient) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest, opts ...gax.CallOption) error {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return context.Cause(ctx)
 	}
 
 	m.mu.Lock()
@@ -325,7 +325,7 @@ func (m *mockClient) ListSecretVersions(ctx context.Context, req *secretmanagerp
 
 func (m *mockClient) DestroySecretVersion(ctx context.Context, req *secretmanagerpb.DestroySecretVersionRequest, opts ...gax.CallOption) (*secretmanagerpb.SecretVersion, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	m.mu.Lock()
