@@ -51,12 +51,23 @@ func (put *PutOptions) CacheControl() string { return put.cacheControl }
 
 // ContentLength returns the configured value, else tries to figure out the content length of the io.Reader.
 // If it cannot figure out the length, then returns -1.
+//
+// The following interfaces are probed in order of precedence:
+//
+//  1. ContentLength() int64 — explicit 64-bit length (takes precedence over Len)
+//  2. Len() int             — implemented by bytes.Buffer, bytes.Reader, strings.Reader
+//  3. *os.File              — uses Stat to obtain the file size
+//  4. io.Seeker             — seeks to end and back to measure the remaining bytes
 func (put *PutOptions) ContentLength(r io.Reader) (int64, error) {
 	if put.contentLength != nil {
 		return *put.contentLength, nil
 	}
 
 	switch r := r.(type) {
+	case interface{ ContentLength() int64 }:
+		// Takes precedence over Len() int to avoid truncation for sizes > 2 GiB.
+		return r.ContentLength(), nil
+
 	case interface{ Len() int }:
 		// Implemented by bytes.Buffer, bytes.Reader, strings.Reader
 		return int64(r.Len()), nil
