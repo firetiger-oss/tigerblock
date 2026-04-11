@@ -574,9 +574,9 @@ func TestHTTPStorageSpecialCharacterKeys(t *testing.T) {
 		"file+name",
 		"file(1).txt",
 		"caf\u00e9/menu",
-		"foo%2Fbar",  // literal %2F in key name (not a slash)
-		"my%20file",  // literal %20 in key name (not a space)
-		"foo%25bar",  // literal %25 in key name (not a percent)
+		"foo%2Fbar", // literal %2F in key name (not a slash)
+		"my%20file", // literal %20 in key name (not a space)
+		"foo%25bar", // literal %25 in key name (not a percent)
 	}
 
 	for _, key := range testKeys {
