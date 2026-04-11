@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -122,7 +123,7 @@ func (w *headResponseWriter) flush() {
 }
 
 func makeKey(r *http.Request) string {
-	return strings.TrimPrefix(r.URL.EscapedPath(), "/")
+	return strings.TrimPrefix(r.URL.Path, "/")
 }
 
 func handleHEAD(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *HandlerOptions) {
@@ -424,6 +425,11 @@ func handleCopyObject(w http.ResponseWriter, r *http.Request, b storage.Bucket, 
 	sourceBucket, sourceKey, ok := strings.Cut(copySource, "/")
 	if !ok {
 		Error(w, "InvalidArgument", "Invalid x-amz-copy-source header", copySource, http.StatusBadRequest)
+		return
+	}
+	sourceKey, err := url.PathUnescape(sourceKey)
+	if err != nil {
+		Error(w, "InvalidArgument", "Invalid x-amz-copy-source header: "+err.Error(), copySource, http.StatusBadRequest)
 		return
 	}
 	destKey := makeKey(r)

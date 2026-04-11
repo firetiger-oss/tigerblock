@@ -539,192 +539,312 @@ func TestHTTPStorageWithPathInURL(t *testing.T) {
 	})
 }
 
-// TestHTTPServerEscapedPaths verifies that the HTTP server correctly preserves
-// percent-encoded characters in URL paths, preventing automatic unescaping.
-// This validates the fix where makeKey() uses r.URL.EscapedPath() instead of r.URL.Path.
-//
-// The fix ensures that escaped paths are not mistakenly unescaped, which could lead to:
-// 1. Security issues (e.g., path traversal with ..%2F)
-// 2. Incorrect object key lookups when keys contain percent-encoded sequences
-func TestHTTPServerEscapedPaths(t *testing.T) {
-	// Create a memory bucket backend
+// TestHTTPStorageSpecialCharacterKeys verifies that object keys with special
+// characters round-trip correctly through the full HTTP client → server → memory
+// backend stack. The keys stored in the backing memory bucket must match the
+// original keys exactly, with no percent-encoding artifacts.
+func TestHTTPStorageSpecialCharacterKeys(t *testing.T) {
 	backend := new(memory.Bucket)
 	ctx := t.Context()
 
-	// Test cases where percent-encoding should be preserved in the object key
-	testCases := []struct {
-		name        string
-		objectKey   string // The actual object key to store (with percent encoding preserved)
-		urlPath     string // The URL path to use in HTTP requests
-		content     string
-		description string
-	}{
-		{
-			name:        "escaped slash preserved",
-			objectKey:   "foo%2Fbar",  // Key contains literal %2F
-			urlPath:     "/foo%2Fbar", // URL with %2F
-			content:     "slash content",
-			description: "Escaped slash %2F should be preserved in the key, not decoded to /",
-		},
-		{
-			name:        "escaped space preserved",
-			objectKey:   "my%20file",  // Key contains literal %20
-			urlPath:     "/my%20file", // URL with %20
-			content:     "space content",
-			description: "Escaped space %20 should be preserved in the key, not decoded to space",
-		},
-		{
-			name:        "escaped percent preserved",
-			objectKey:   "foo%25bar",  // Key contains literal %25
-			urlPath:     "/foo%25bar", // URL with %25
-			content:     "percent content",
-			description: "Escaped percent %25 should be preserved in the key, not decoded to %",
-		},
-		{
-			name:        "double dot slash prevented",
-			objectKey:   "safe%2F..%2Fetc",  // Key contains escaped path traversal attempt
-			urlPath:     "/safe%2F..%2Fetc", // URL with escaped ../
-			content:     "security content",
-			description: "Escaped path traversal sequences should stay escaped",
-		},
-		{
-			name:        "normal unescaped path",
-			objectKey:   "foo/bar/baz",  // Normal hierarchical key
-			urlPath:     "/foo/bar/baz", // Normal path
-			content:     "normal content",
-			description: "Normal unescaped paths should work as before",
-		},
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	location := "http://" + l.Addr().String()
+
+	s := &http.Server{
+		Handler: storagehttp.BucketHandler(backend,
+			storagehttp.WithLocation(location),
+			storagehttp.WithMaxKeys(100),
+		),
+	}
+	go s.Serve(l)
+	t.Cleanup(func() {
+		s.Close()
+		l.Close()
+	})
+
+	bucket := storagehttp.NewBucket(location)
+
+	testKeys := []string{
+		"hello world",
+		"path/with spaces/file",
+		"100%done",
+		"file+name",
+		"file(1).txt",
+		"caf\u00e9/menu",
+		"foo%2Fbar", // literal %2F in key name (not a slash)
+		"my%20file", // literal %20 in key name (not a space)
+		"foo%25bar", // literal %25 in key name (not a percent)
 	}
 
-	// Create test server
-	server := httptest.NewServer(storagehttp.BucketHandler(backend))
-	t.Cleanup(func() {
-		server.Close()
+	for _, key := range testKeys {
+		t.Run(key, func(t *testing.T) {
+			content := "content for " + key
+
+			// PutObject through the HTTP client
+			_, err := bucket.PutObject(ctx, key, strings.NewReader(content))
+			if err != nil {
+				t.Fatalf("PutObject(%q) failed: %v", key, err)
+			}
+
+			// Verify the key in the backing memory bucket is not mangled
+			reader, _, err := backend.GetObject(ctx, key)
+			if err != nil {
+				t.Fatalf("backend.GetObject(%q) failed (key may be stored with wrong encoding): %v", key, err)
+			}
+			body, _ := io.ReadAll(reader)
+			reader.Close()
+			if string(body) != content {
+				t.Fatalf("backend content mismatch for key %q: got %q, want %q", key, body, content)
+			}
+
+			// HeadObject
+			info, err := bucket.HeadObject(ctx, key)
+			if err != nil {
+				t.Fatalf("HeadObject(%q) failed: %v", key, err)
+			}
+			if info.Size != int64(len(content)) {
+				t.Errorf("HeadObject(%q) size = %d, want %d", key, info.Size, len(content))
+			}
+
+			// GetObject
+			reader, _, err = bucket.GetObject(ctx, key)
+			if err != nil {
+				t.Fatalf("GetObject(%q) failed: %v", key, err)
+			}
+			body, _ = io.ReadAll(reader)
+			reader.Close()
+			if string(body) != content {
+				t.Errorf("GetObject(%q) body = %q, want %q", key, body, content)
+			}
+
+			// CopyObject
+			copyKey := key + "-copy"
+			if err := bucket.CopyObject(ctx, key, copyKey); err != nil {
+				t.Fatalf("CopyObject(%q, %q) failed: %v", key, copyKey, err)
+			}
+			reader, _, err = backend.GetObject(ctx, copyKey)
+			if err != nil {
+				t.Fatalf("backend.GetObject(%q) after copy failed: %v", copyKey, err)
+			}
+			body, _ = io.ReadAll(reader)
+			reader.Close()
+			if string(body) != content {
+				t.Errorf("CopyObject content mismatch for %q: got %q, want %q", copyKey, body, content)
+			}
+
+			// DeleteObject
+			if err := bucket.DeleteObject(ctx, key); err != nil {
+				t.Fatalf("DeleteObject(%q) failed: %v", key, err)
+			}
+			_, err = backend.HeadObject(ctx, key)
+			if !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("after DeleteObject(%q), backend still has object: %v", key, err)
+			}
+
+			// Clean up copy
+			backend.DeleteObject(ctx, copyKey)
+		})
+	}
+
+	// Test that ListObjects returns correctly decoded keys
+	t.Run("ListObjects", func(t *testing.T) {
+		for _, key := range testKeys {
+			if _, err := bucket.PutObject(ctx, key, strings.NewReader("x")); err != nil {
+				t.Fatalf("PutObject(%q) failed: %v", key, err)
+			}
+		}
+
+		var listedKeys []string
+		for obj, err := range bucket.ListObjects(ctx) {
+			if err != nil {
+				t.Fatalf("ListObjects failed: %v", err)
+			}
+			listedKeys = append(listedKeys, obj.Key)
+		}
+
+		if len(listedKeys) != len(testKeys) {
+			t.Fatalf("ListObjects returned %d keys, want %d: %v", len(listedKeys), len(testKeys), listedKeys)
+		}
+
+		for _, key := range testKeys {
+			found := false
+			for _, listed := range listedKeys {
+				if listed == key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("ListObjects missing key %q; got %v", key, listedKeys)
+			}
+		}
+
+		// Clean up
+		for _, key := range testKeys {
+			backend.DeleteObject(ctx, key)
+		}
 	})
+}
+
+// TestHTTPServerKeyDecodingRaw verifies server-side key extraction with raw HTTP
+// requests, independent of the Go client. This catches issues where client and
+// server changes mask each other.
+func TestHTTPServerKeyDecodingRaw(t *testing.T) {
+	backend := new(memory.Bucket)
+	ctx := t.Context()
+
+	server := httptest.NewServer(storagehttp.BucketHandler(backend))
+	t.Cleanup(server.Close)
 
 	client := &http.Client{}
 
+	// Each case maps a raw URL path to the expected key in the backend.
+	// The URL path is what an HTTP client would send on the wire.
+	testCases := []struct {
+		name        string
+		urlPath     string // raw URL path (percent-encoded as needed)
+		expectedKey string // key that should appear in backend
+	}{
+		{
+			name:        "space encoded as %20",
+			urlPath:     "/hello%20world",
+			expectedKey: "hello world",
+		},
+		{
+			name:        "nested path with encoded spaces",
+			urlPath:     "/path/with%20spaces/file",
+			expectedKey: "path/with spaces/file",
+		},
+		{
+			name:        "literal percent via double encoding %25",
+			urlPath:     "/100%25done",
+			expectedKey: "100%done",
+		},
+		{
+			name:        "literal %2F via double encoding %252F",
+			urlPath:     "/foo%252Fbar",
+			expectedKey: "foo%2Fbar",
+		},
+		{
+			name:        "literal %20 via double encoding %2520",
+			urlPath:     "/my%2520file",
+			expectedKey: "my%20file",
+		},
+		{
+			name:        "normal hierarchical path",
+			urlPath:     "/foo/bar/baz",
+			expectedKey: "foo/bar/baz",
+		},
+		{
+			name:        "plus sign preserved",
+			urlPath:     "/file+name",
+			expectedKey: "file+name",
+		},
+		{
+			name:        "unicode encoded",
+			urlPath:     "/caf%C3%A9/menu",
+			expectedKey: "caf\u00e9/menu",
+		},
+	}
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// First, put the object directly into the backend
-			_, err := backend.PutObject(ctx, tc.objectKey, strings.NewReader(tc.content))
+			// PUT via raw request
+			content := "content for " + tc.expectedKey
+			req, err := http.NewRequest("PUT", server.URL+tc.urlPath, strings.NewReader(content))
 			if err != nil {
-				t.Fatalf("failed to put object in backend: %v", err)
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("PUT %s: status %d", tc.urlPath, resp.StatusCode)
 			}
 
-			// Test HEAD request
-			t.Run("HEAD", func(t *testing.T) {
-				req, err := http.NewRequest("HEAD", server.URL+tc.urlPath, nil)
-				if err != nil {
-					t.Fatalf("failed to create HEAD request: %v", err)
+			// Verify the key in the backend
+			reader, _, err := backend.GetObject(ctx, tc.expectedKey)
+			if err != nil {
+				// List all keys to help diagnose
+				var keys []string
+				for obj, _ := range backend.ListObjects(ctx) {
+					keys = append(keys, obj.Key)
 				}
+				t.Fatalf("backend.GetObject(%q) failed: %v (backend has keys: %v)", tc.expectedKey, err, keys)
+			}
+			body, _ := io.ReadAll(reader)
+			reader.Close()
+			if string(body) != content {
+				t.Errorf("backend content = %q, want %q", body, content)
+			}
 
-				resp, err := client.Do(req)
-				if err != nil {
-					t.Fatalf("HEAD request failed: %v", err)
-				}
-				defer resp.Body.Close()
+			// GET via raw request
+			req, _ = http.NewRequest("GET", server.URL+tc.urlPath, nil)
+			resp, err = client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s: status %d", tc.urlPath, resp.StatusCode)
+			}
+			if string(body) != content {
+				t.Errorf("GET body = %q, want %q", body, content)
+			}
 
-				if resp.StatusCode != http.StatusOK {
-					t.Errorf("HEAD request failed: expected status 200, got %d", resp.StatusCode)
-				}
+			// DELETE via raw request
+			req, _ = http.NewRequest("DELETE", server.URL+tc.urlPath, nil)
+			resp, err = client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("DELETE %s: status %d", tc.urlPath, resp.StatusCode)
+			}
 
-				// Check Content-Length header
-				if resp.ContentLength != int64(len(tc.content)) {
-					t.Errorf("HEAD request: expected Content-Length %d, got %d", len(tc.content), resp.ContentLength)
-				}
-			})
-
-			// Test GET request
-			t.Run("GET", func(t *testing.T) {
-				req, err := http.NewRequest("GET", server.URL+tc.urlPath, nil)
-				if err != nil {
-					t.Fatalf("failed to create GET request: %v", err)
-				}
-
-				resp, err := client.Do(req)
-				if err != nil {
-					t.Fatalf("GET request failed: %v", err)
-				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode != http.StatusOK {
-					t.Errorf("GET request failed: expected status 200, got %d", resp.StatusCode)
-				}
-
-				body, err := io.ReadAll(resp.Body)
-				if err != nil {
-					t.Fatalf("failed to read response body: %v", err)
-				}
-
-				if string(body) != tc.content {
-					t.Errorf("GET request: expected body %q, got %q", tc.content, string(body))
-				}
-			})
-
-			// Test PUT request (update the object)
-			t.Run("PUT", func(t *testing.T) {
-				newContent := tc.content + " updated"
-				req, err := http.NewRequest("PUT", server.URL+tc.urlPath, strings.NewReader(newContent))
-				if err != nil {
-					t.Fatalf("failed to create PUT request: %v", err)
-				}
-
-				resp, err := client.Do(req)
-				if err != nil {
-					t.Fatalf("PUT request failed: %v", err)
-				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-					t.Errorf("PUT request failed: expected status 200 or 201, got %d", resp.StatusCode)
-				}
-
-				// Verify the update by reading from backend
-				reader, _, err := backend.GetObject(ctx, tc.objectKey)
-				if err != nil {
-					t.Fatalf("failed to get updated object from backend: %v", err)
-				}
-				defer reader.Close()
-
-				body, err := io.ReadAll(reader)
-				if err != nil {
-					t.Fatalf("failed to read updated object: %v", err)
-				}
-
-				if string(body) != newContent {
-					t.Errorf("PUT request: expected updated content %q, got %q", newContent, string(body))
-				}
-			})
-
-			// Test DELETE request
-			t.Run("DELETE", func(t *testing.T) {
-				req, err := http.NewRequest("DELETE", server.URL+tc.urlPath, nil)
-				if err != nil {
-					t.Fatalf("failed to create DELETE request: %v", err)
-				}
-
-				resp, err := client.Do(req)
-				if err != nil {
-					t.Fatalf("DELETE request failed: %v", err)
-				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-					t.Errorf("DELETE request failed: expected status 200 or 204, got %d", resp.StatusCode)
-				}
-
-				// Verify deletion by checking if object exists in backend
-				_, err = backend.HeadObject(ctx, tc.objectKey)
-				if !errors.Is(err, storage.ErrObjectNotFound) {
-					t.Errorf("DELETE request: object should not exist, got error: %v", err)
-				}
-			})
-
-			// Clean up: delete the object if it still exists
-			t.Cleanup(func() {
-				backend.DeleteObject(ctx, tc.objectKey)
-			})
+			_, err = backend.HeadObject(ctx, tc.expectedKey)
+			if !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("after DELETE, backend still has key %q: %v", tc.expectedKey, err)
+			}
 		})
 	}
+
+	// Test CopyObject with raw request and URL-encoded copy source
+	t.Run("CopyObjectRaw", func(t *testing.T) {
+		_, err := backend.PutObject(ctx, "hello world", strings.NewReader("copy me"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Copy via raw PUT with X-Amz-Copy-Source header (URL-encoded source key)
+		req, _ := http.NewRequest("PUT", server.URL+"/hello%20world-copy", nil)
+		req.Header.Set("X-Amz-Copy-Source", "//hello%20world") // bucket is empty for memory
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("COPY status %d: %s", resp.StatusCode, body)
+		}
+
+		// Verify copy landed with correct key
+		reader, _, err := backend.GetObject(ctx, "hello world-copy")
+		if err != nil {
+			t.Fatalf("backend.GetObject(\"hello world-copy\") failed: %v", err)
+		}
+		body, _ := io.ReadAll(reader)
+		reader.Close()
+		if string(body) != "copy me" {
+			t.Errorf("copy content = %q, want %q", body, "copy me")
+		}
+	})
 }

@@ -100,6 +100,14 @@ type Bucket struct {
 	signer   secret.Signer
 }
 
+func escapeKey(key string) string {
+	segments := strings.Split(key, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return strings.Join(segments, "/")
+}
+
 func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	r, err := http.NewRequestWithContext(ctx, method, b.host+"/"+path, body)
 	if err != nil {
@@ -200,7 +208,7 @@ func (b *Bucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo
 		return storage.ObjectInfo{}, err
 	}
 
-	req, err := b.newRequest(ctx, http.MethodHead, key, nil)
+	req, err := b.newRequest(ctx, http.MethodHead, escapeKey(key), nil)
 	if err != nil {
 		return storage.ObjectInfo{}, makeIcebergError(req, nil, err)
 	}
@@ -227,7 +235,7 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		return nil, storage.ObjectInfo{}, err
 	}
 
-	req, err := b.newRequest(ctx, http.MethodGet, key, nil)
+	req, err := b.newRequest(ctx, http.MethodGet, escapeKey(key), nil)
 	if err != nil {
 		return nil, storage.ObjectInfo{}, makeIcebergError(req, nil, err)
 	}
@@ -273,7 +281,7 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 		return storage.ObjectInfo{}, err
 	}
 
-	req, err := b.newRequest(ctx, http.MethodPut, key, value)
+	req, err := b.newRequest(ctx, http.MethodPut, escapeKey(key), value)
 	if err != nil {
 		return storage.ObjectInfo{}, makeIcebergError(req, nil, err)
 	}
@@ -318,7 +326,7 @@ func (b *Bucket) DeleteObject(ctx context.Context, key string) error {
 		return err
 	}
 
-	req, err := b.newRequest(ctx, http.MethodDelete, key, nil)
+	req, err := b.newRequest(ctx, http.MethodDelete, escapeKey(key), nil)
 	if err != nil {
 		return makeIcebergError(req, nil, err)
 	}
@@ -461,7 +469,7 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 		return err
 	}
 
-	req, err := b.newRequest(ctx, http.MethodPut, to, nil)
+	req, err := b.newRequest(ctx, http.MethodPut, escapeKey(to), nil)
 	if err != nil {
 		return makeIcebergError(req, nil, err)
 	}
@@ -469,7 +477,7 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 
 	// Extract bucket name from host URL for x-amz-copy-source header
 	_, bucketName, _ := uri.Split(b.host)
-	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+from)
+	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+escapeKey(from))
 
 	putOptions := storage.NewPutOptions(options...)
 	setHeaderIfNotEmpty(req.Header, "Cache-Control", putOptions.CacheControl())
@@ -620,7 +628,7 @@ func (b *Bucket) PresignGetObject(ctx context.Context, key string, expiration ti
 	if b.signer == nil {
 		return "", storage.ErrPresignNotSupported
 	}
-	u, err := url.Parse(b.host + "/" + key)
+	u, err := url.Parse(b.host + "/" + escapeKey(key))
 	if err != nil {
 		return "", err
 	}
@@ -634,7 +642,7 @@ func (b *Bucket) PresignPutObject(ctx context.Context, key string, expiration ti
 	if b.signer == nil {
 		return "", storage.ErrPresignNotSupported
 	}
-	u, err := url.Parse(b.host + "/" + key)
+	u, err := url.Parse(b.host + "/" + escapeKey(key))
 	if err != nil {
 		return "", err
 	}
