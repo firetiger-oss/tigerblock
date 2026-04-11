@@ -41,10 +41,11 @@ func init() {
 
 func NewRegistry(workingDirectory string) storage.Registry {
 	return storage.RegistryFunc(func(ctx context.Context, bucket string) (storage.Bucket, error) {
+		root := workingDirectory
 		if bucket != "" {
-			return nil, fmt.Errorf("file storage does not support bucket names (got %q)", bucket)
+			root = filepath.Join(workingDirectory, bucket)
 		}
-		return NewBucket(workingDirectory), nil
+		return NewBucket(root), nil
 	})
 }
 
@@ -67,7 +68,7 @@ type Bucket struct {
 }
 
 func (b *Bucket) Location() string {
-	return "file:///"
+	return "file://" + strings.TrimSuffix(b.root, "/") + "/"
 }
 
 func (b *Bucket) Access(ctx context.Context) error {

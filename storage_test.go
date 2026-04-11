@@ -768,6 +768,107 @@ func TestRegistryFuncURINormalization(t *testing.T) {
 	}
 }
 
+// TestLoadBucketWithPath verifies that storage.LoadBucket correctly passes
+// the full URI path to registries. Previously, LoadBucket stripped the path
+// and used WithPrefix, which broke backends like HTTP where the path is part
+// of the URL rather than an S3-style key prefix.
+func TestLoadBucketWithPath(t *testing.T) {
+	t.Run("memoryRegistryWithPath", func(t *testing.T) {
+		// Verify that loading a memory bucket with a path correctly
+		// treats the path as a prefix for object operations
+		bucket := memory.NewBucket(
+			&memory.Entry{Key: "sub/path/file1.txt", Value: []byte("v1")},
+			&memory.Entry{Key: "sub/path/file2.txt", Value: []byte("v2")},
+			&memory.Entry{Key: "other/file3.txt", Value: []byte("v3")},
+		)
+		storage.Register("TestLoadBucketWithPath", storage.SingleBucketRegistry(bucket))
+
+		// Load with a path — should only see objects under "sub/path/"
+		prefixBucket, err := storage.LoadBucket(t.Context(), "TestLoadBucketWithPath://:memory:/sub/path")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// ListObjects should only return objects under the prefix
+		var keys []string
+		for obj, err := range prefixBucket.ListObjects(t.Context()) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys = append(keys, obj.Key)
+		}
+		if len(keys) != 2 {
+			t.Fatalf("expected 2 objects under sub/path/, got %d: %v", len(keys), keys)
+		}
+
+		// GetObject should work with keys relative to the prefix
+		r, _, err := prefixBucket.GetObject(t.Context(), "file1.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		data, _ := io.ReadAll(r)
+		if string(data) != "v1" {
+			t.Errorf("expected 'v1', got %q", data)
+		}
+
+		// PutObject should write under the prefix
+		if _, err := prefixBucket.PutObject(t.Context(), "file4.txt", strings.NewReader("v4")); err != nil {
+			t.Fatal(err)
+		}
+		// Verify via the underlying bucket
+		r2, _, err := bucket.GetObject(t.Context(), "sub/path/file4.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r2.Close()
+		data2, _ := io.ReadAll(r2)
+		if string(data2) != "v4" {
+			t.Errorf("expected 'v4', got %q", data2)
+		}
+	})
+
+	t.Run("registryReceivesFullPath", func(t *testing.T) {
+		// Verify that the registry's load function receives the full path
+		// (bucket name + path), not just the bucket name
+		var receivedURI string
+		reg := storage.RegistryFunc(func(ctx context.Context, bucketURI string) (storage.Bucket, error) {
+			receivedURI = bucketURI
+			return new(memory.Bucket), nil
+		})
+		storage.Register("TestRegistryFullPath", reg)
+
+		_, err := storage.LoadBucket(t.Context(), "TestRegistryFullPath://my-bucket/some/prefix")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// The registry should receive "my-bucket/some/prefix", not just "my-bucket"
+		if receivedURI != "my-bucket/some/prefix" {
+			t.Errorf("expected registry to receive 'my-bucket/some/prefix', got %q", receivedURI)
+		}
+	})
+
+	t.Run("registryReceivesEmptyPathForRootBucket", func(t *testing.T) {
+		// Verify that root-level buckets still work (no path component)
+		var receivedURI string
+		reg := storage.RegistryFunc(func(ctx context.Context, bucketURI string) (storage.Bucket, error) {
+			receivedURI = bucketURI
+			return new(memory.Bucket), nil
+		})
+		storage.Register("TestRegistryNoPath", reg)
+
+		_, err := storage.LoadBucket(t.Context(), "TestRegistryNoPath://my-bucket")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if receivedURI != "my-bucket" {
+			t.Errorf("expected registry to receive 'my-bucket', got %q", receivedURI)
+		}
+	})
+}
+
 func TestWithAdapters(t *testing.T) {
 	bucket := memory.NewBucket()
 	baseRegistry := storage.SingleBucketRegistry(bucket)

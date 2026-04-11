@@ -309,11 +309,11 @@ func loadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s: %w (did you forget the import?)", bucketURI, ErrBucketNotFound)
 	}
-	bucket, err := bucketRegistry.LoadBucket(ctx, bucketName)
+	bucket, err := bucketRegistry.LoadBucket(ctx, uri.Join("", bucketName, objectKey))
 	if err != nil {
 		return nil, err
 	}
-	bucket = normalizeBucket(bucket, bucketType, objectKey)
+	bucket = normalizeBucket(bucket, bucketType, "")
 	bucket = AdaptBucket(bucket, bucketAdapters...)
 	return bucket, nil
 }

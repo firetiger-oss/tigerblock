@@ -24,6 +24,7 @@ import (
 	"iter"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/firetiger-oss/storage"
@@ -76,7 +77,8 @@ func NewRegistry(options ...Option) storage.Registry {
 			return nil, ErrMissingAccountID
 		}
 
-		endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com/%s", accountID, bucket)
+		bucketName, prefix, _ := strings.Cut(bucket, "/")
+		endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com/%s", accountID, bucketName)
 
 		// Create SigV4 transport for request signing
 		// R2 uses "s3" service and "auto" region for signing
@@ -91,13 +93,20 @@ func NewRegistry(options ...Option) storage.Registry {
 			sigv4.WithRegion("auto"),
 		)
 
-		return &Bucket{
+		var b storage.Bucket = &Bucket{
 			inner: storagehttp.NewBucket(endpoint,
 				storagehttp.WithClient(&http.Client{Transport: transport}),
 				storagehttp.WithSigner(signer),
 			),
-			bucketName: bucket,
-		}, nil
+			bucketName: bucketName,
+		}
+		if prefix != "" {
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			return storage.Prefix(b, prefix), nil
+		}
+		return b, nil
 	})
 }
 

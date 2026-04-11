@@ -50,6 +50,8 @@ func NewRegistry(options ...RegistryOption) storage.Registry {
 	var cachedGoogleClient cache.Value[*gcloud.Client]
 	var cachedPutClient cache.Value[*gsclient.Client]
 	return storage.RegistryFunc(func(ctx context.Context, bucket string) (storage.Bucket, error) {
+		bucketName, prefix, _ := strings.Cut(bucket, "/")
+
 		var httpClient *http.Client
 		if opts.httpClient != nil {
 			httpClient = opts.httpClient
@@ -71,13 +73,20 @@ func NewRegistry(options ...RegistryOption) storage.Registry {
 		}
 
 		putClient, err := cachedPutClient.Load(func() (*gsclient.Client, error) {
-			return gsclient.NewGoogleCloudStorageClient(context.Background(), bucket, gsclient.WithHTTPClient(httpClient))
+			return gsclient.NewGoogleCloudStorageClient(context.Background(), bucketName, gsclient.WithHTTPClient(httpClient))
 		})
 		if err != nil {
 			return nil, err
 		}
 
-		return NewBucket(googleClient, putClient, bucket), nil
+		b := NewBucket(googleClient, putClient, bucketName)
+		if prefix != "" {
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			return storage.Prefix(b, prefix), nil
+		}
+		return b, nil
 	})
 }
 

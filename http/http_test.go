@@ -438,6 +438,107 @@ func (m *mockPresignBucket) PresignGetObject(ctx context.Context, key string, ex
 	return "https://example.com/presigned", nil
 }
 
+// TestHTTPStorageWithPathInURL verifies that loading an HTTP bucket with a path
+// in the URL (e.g., http://host/v1/path/to/endpoint) correctly routes all
+// operations through the full URL path. This was a bug where loadBucket stripped
+// the path and used WithPrefix instead, which broke ListObjects by sending
+// ?prefix=v1%2Fpath%2F to the root instead of listing at the full URL path.
+func TestHTTPStorageWithPathInURL(t *testing.T) {
+	backend := new(memory.Bucket)
+	ctx := t.Context()
+
+	// Put some objects in the backend
+	for _, key := range []string{"file1.txt", "file2.txt", "dir/file3.txt"} {
+		if _, err := backend.PutObject(ctx, key, strings.NewReader("content-"+key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Start an HTTP server that serves the bucket under a sub-path
+	const pathPrefix = "/v1/agents/test/artifacts"
+	mux := http.NewServeMux()
+	mux.Handle(pathPrefix+"/", http.StripPrefix(pathPrefix,
+		storagehttp.BucketHandler(backend, storagehttp.WithMaxKeys(10)),
+	))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	// Load the bucket using the full URL with path
+	bucket, err := storage.LoadBucket(ctx, server.URL+pathPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// HeadObject should work (sends HEAD to full URL path + key)
+	t.Run("HeadObject", func(t *testing.T) {
+		info, err := bucket.HeadObject(ctx, "file1.txt")
+		if err != nil {
+			t.Fatalf("HeadObject failed: %v", err)
+		}
+		if info.Size != int64(len("content-file1.txt")) {
+			t.Errorf("expected size %d, got %d", len("content-file1.txt"), info.Size)
+		}
+	})
+
+	// GetObject should work (sends GET to full URL path + key)
+	t.Run("GetObject", func(t *testing.T) {
+		r, _, err := bucket.GetObject(ctx, "file1.txt")
+		if err != nil {
+			t.Fatalf("GetObject failed: %v", err)
+		}
+		defer r.Close()
+		data, _ := io.ReadAll(r)
+		if string(data) != "content-file1.txt" {
+			t.Errorf("expected 'content-file1.txt', got %q", data)
+		}
+	})
+
+	// ListObjects should work (sends GET to full URL path with query params,
+	// NOT to root with ?prefix=v1%2Fagents%2F...)
+	t.Run("ListObjects", func(t *testing.T) {
+		var keys []string
+		for obj, err := range bucket.ListObjects(ctx) {
+			if err != nil {
+				t.Fatalf("ListObjects failed: %v", err)
+			}
+			keys = append(keys, obj.Key)
+		}
+		if len(keys) != 3 {
+			t.Errorf("expected 3 objects, got %d: %v", len(keys), keys)
+		}
+	})
+
+	// PutObject should work (sends PUT to full URL path + key)
+	t.Run("PutObject", func(t *testing.T) {
+		_, err := bucket.PutObject(ctx, "new-file.txt", strings.NewReader("new content"))
+		if err != nil {
+			t.Fatalf("PutObject failed: %v", err)
+		}
+		// Verify via backend
+		r, _, err := backend.GetObject(ctx, "new-file.txt")
+		if err != nil {
+			t.Fatalf("backend GetObject failed: %v", err)
+		}
+		defer r.Close()
+		data, _ := io.ReadAll(r)
+		if string(data) != "new content" {
+			t.Errorf("expected 'new content', got %q", data)
+		}
+	})
+
+	// DeleteObject should work
+	t.Run("DeleteObject", func(t *testing.T) {
+		err := bucket.DeleteObject(ctx, "file2.txt")
+		if err != nil {
+			t.Fatalf("DeleteObject failed: %v", err)
+		}
+		_, err = backend.HeadObject(ctx, "file2.txt")
+		if !errors.Is(err, storage.ErrObjectNotFound) {
+			t.Errorf("expected ErrObjectNotFound after delete, got: %v", err)
+		}
+	})
+}
+
 // TestHTTPServerEscapedPaths verifies that the HTTP server correctly preserves
 // percent-encoded characters in URL paths, preventing automatic unescaping.
 // This validates the fix where makeKey() uses r.URL.EscapedPath() instead of r.URL.Path.

@@ -70,7 +70,15 @@ func NewRegistry(options ...func(*s3.Options)) storage.Registry {
 		if err != nil {
 			return nil, err
 		}
-		return NewBucket(client, bucket), nil
+		bucketName, prefix, _ := strings.Cut(bucket, "/")
+		b := NewBucket(client, bucketName)
+		if prefix != "" {
+			if !strings.HasSuffix(prefix, "/") {
+				prefix += "/"
+			}
+			return storage.Prefix(b, prefix), nil
+		}
+		return b, nil
 	})
 }
 
