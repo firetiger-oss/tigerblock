@@ -354,6 +354,143 @@ func TestPromiseWait(t *testing.T) {
 	}
 }
 
+func TestLRUPanicPropagatesToCaller(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+
+	func() {
+		defer func() {
+			r := recover()
+			if r != "boom" {
+				t.Errorf("expected 'boom', got %v", r)
+			}
+		}()
+		lru.Load("key", func() (int64, string, error) {
+			panic("boom")
+		})
+		t.Error("Load should have panicked")
+	}()
+
+	// Inflight entry must be cleared so a subsequent Load can succeed.
+	value, err := lru.Load("key", func() (int64, string, error) {
+		return 10, "recovered", nil
+	})
+	if err != nil {
+		t.Fatalf("second Load failed: %v", err)
+	}
+	if value != "recovered" {
+		t.Errorf("expected 'recovered', got %q", value)
+	}
+}
+
+func TestLRUPanicPropagatesToWaiters(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+
+	const numWaiters = 5
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(numWaiters)
+	done.Add(numWaiters)
+
+	var mu sync.Mutex
+	recovered := make([]any, 0, numWaiters)
+
+	for range numWaiters {
+		go func() {
+			defer done.Done()
+			defer func() {
+				mu.Lock()
+				recovered = append(recovered, recover())
+				mu.Unlock()
+			}()
+			start.Done()
+			lru.Load("key", func() (int64, string, error) {
+				time.Sleep(20 * time.Millisecond)
+				panic("kaboom")
+			})
+		}()
+	}
+
+	start.Wait()
+	done.Wait()
+
+	if len(recovered) != numWaiters {
+		t.Fatalf("expected %d recoveries, got %d", numWaiters, len(recovered))
+	}
+	for i, r := range recovered {
+		if r != "kaboom" {
+			t.Errorf("waiter %d: expected 'kaboom', got %v", i, r)
+		}
+	}
+
+	value, err := lru.Load("key", func() (int64, string, error) {
+		return 10, "after_panic", nil
+	})
+	if err != nil || value != "after_panic" {
+		t.Errorf("post-panic Load failed: value=%q err=%v", value, err)
+	}
+}
+
+func TestLRUPeekDoesNotRepanic(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+
+	var fetchStarted sync.WaitGroup
+	var proceed sync.WaitGroup
+	fetchStarted.Add(1)
+	proceed.Add(1)
+
+	loadDone := make(chan struct{})
+	go func() {
+		defer close(loadDone)
+		defer func() { recover() }()
+		lru.Load("key", func() (int64, string, error) {
+			fetchStarted.Done()
+			proceed.Wait()
+			panic("peek_panic")
+		})
+	}()
+
+	fetchStarted.Wait()
+
+	peekDone := make(chan struct{})
+	go func() {
+		defer close(peekDone)
+		_, found := lru.Peek("key")
+		if found {
+			t.Error("Peek should report not found when fetch panics")
+		}
+	}()
+
+	proceed.Done()
+	<-peekDone
+	<-loadDone
+}
+
+func TestLRUStatAccounting(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+
+	// First Load: miss, fetch, cache insert.
+	if _, err := lru.Load("k", func() (int64, string, error) {
+		return 10, "v", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Second Load: hit.
+	if _, err := lru.Load("k", func() (int64, string, error) {
+		t.Error("fetch should not run on cache hit")
+		return 0, "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stat := lru.Stat()
+	if stat.Misses != 1 {
+		t.Errorf("expected 1 miss, got %d", stat.Misses)
+	}
+	if stat.Hits != 1 {
+		t.Errorf("expected 1 hit, got %d", stat.Hits)
+	}
+}
+
 func TestLRUZeroLimit(t *testing.T) {
 	lru := &LRU[string, string]{Limit: 0}
 

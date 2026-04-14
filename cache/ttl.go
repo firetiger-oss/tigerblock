@@ -26,28 +26,24 @@ func (c *TTL[K, V]) Drop(ks ...K) {
 }
 
 func (c *TTL[K, V]) Load(key K, now time.Time, update bool, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
-	var promise *Promise[ttlEntry[V]]
-
 	c.mutex.Lock()
 	entry, ok := c.cache.Lookup(key)
-	if !ok || update || (!entry.expire.IsZero() && now.After(entry.expire)) {
-		promise = c.lru().get(key, func() (int64, ttlEntry[V], error) {
-			size, value, expire, err := fetch()
-			if err != nil {
-				return 0, ttlEntry[V]{}, err
-			}
-			return size, ttlEntry[V]{value: value, expire: expire}, nil
-		})
+	if ok && !update && (entry.expire.IsZero() || !now.After(entry.expire)) {
+		c.mutex.Unlock()
+		return entry.value, entry.expire, nil
 	}
-	c.mutex.Unlock()
 
-	if promise != nil {
-		<-promise.ready
-		if promise.error != nil {
-			return value, expire, promise.error
+	promise := c.lru().fetchLocked(key, func() (int64, ttlEntry[V], error) {
+		size, value, expire, err := fetch()
+		if err != nil {
+			return 0, ttlEntry[V]{}, err
 		}
-		entry = promise.value
-	}
+		return size, ttlEntry[V]{value: value, expire: expire}, nil
+	})
 
+	entry, err = promise.Wait()
+	if err != nil {
+		return value, expire, err
+	}
 	return entry.value, entry.expire, nil
 }
