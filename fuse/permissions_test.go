@@ -97,6 +97,133 @@ func TestStatUsesDefaultsWhenMetadataAbsent(t *testing.T) {
 	}
 }
 
+// TestStatFileOwnershipDefaults verifies that when an object has no
+// uid/gid metadata, the FUSE layer falls back to the MountConfig UID/GID
+// options (not the kernel's all-zeros default, not the caller's identity).
+func TestStatFileOwnershipDefaults(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "foo.txt", []byte("hi"))
+	dir := mountBucketWithOpts(t, bucket,
+		storagefuse.UID(4200),
+		storagefuse.GID(4300),
+	)
+
+	fi, err := os.Stat(filepath.Join(dir, "foo.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("Stat_t not available on this platform")
+	}
+	if stat.Uid != 4200 {
+		t.Errorf("uid: got %d, want 4200", stat.Uid)
+	}
+	if stat.Gid != 4300 {
+		t.Errorf("gid: got %d, want 4300", stat.Gid)
+	}
+}
+
+// TestStatVirtualDirUsesDirModeDefault verifies that a virtual directory
+// (no marker, just children under a prefix) falls back to DirMode on stat.
+func TestStatVirtualDirUsesDirModeDefault(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "prefix/child.txt", []byte("hi"))
+	dir := mountBucketWithOpts(t, bucket,
+		storagefuse.DirMode(0o711),
+	)
+
+	fi, err := os.Stat(filepath.Join(dir, "prefix"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() {
+		t.Fatal("expected directory")
+	}
+	if got := fi.Mode().Perm(); got != 0o711 {
+		t.Fatalf("dir mode: got %o, want 0711", got)
+	}
+}
+
+// TestStatVirtualDirOwnershipDefaults verifies the uid/gid fallback path
+// for a directory with no marker — should come from Mount UID/GID options.
+func TestStatVirtualDirOwnershipDefaults(t *testing.T) {
+	bucket := newBucket(t)
+	put(t, bucket, "prefix/child.txt", []byte("hi"))
+	dir := mountBucketWithOpts(t, bucket,
+		storagefuse.UID(7000),
+		storagefuse.GID(7001),
+	)
+
+	fi, err := os.Stat(filepath.Join(dir, "prefix"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("Stat_t not available on this platform")
+	}
+	if stat.Uid != 7000 {
+		t.Errorf("uid: got %d, want 7000", stat.Uid)
+	}
+	if stat.Gid != 7001 {
+		t.Errorf("gid: got %d, want 7001", stat.Gid)
+	}
+}
+
+// TestStatRootDirUsesDirModeDefault verifies the mount root itself picks up
+// the DirMode option. The root has no marker (nothing above it), so it must
+// always use defaults.
+func TestStatRootDirUsesDirModeDefault(t *testing.T) {
+	bucket := newBucket(t)
+	dir := mountBucketWithOpts(t, bucket,
+		storagefuse.DirMode(0o775),
+	)
+
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o775 {
+		t.Fatalf("root dir mode: got %o, want 0775", got)
+	}
+}
+
+// TestStatMarkerDirOwnershipFallsBackWhenPartial verifies that a dir marker
+// which sets `mode` but not `uid`/`gid` still uses the Mount UID/GID
+// defaults for the absent keys — partial metadata must not reset ownership
+// to zero.
+func TestStatMarkerDirOwnershipFallsBackWhenPartial(t *testing.T) {
+	bucket := newBucket(t)
+	if _, err := bucket.PutObject(t.Context(), "d/", bytes.NewReader(nil),
+		storage.Metadata("mode", "700"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	dir := mountBucketWithOpts(t, bucket,
+		storagefuse.UID(9000),
+		storagefuse.GID(9001),
+	)
+
+	fi, err := os.Stat(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Errorf("mode: got %o, want 0700", got)
+	}
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("Stat_t not available on this platform")
+	}
+	if stat.Uid != 9000 {
+		t.Errorf("uid: got %d, want 9000 (default)", stat.Uid)
+	}
+	if stat.Gid != 9001 {
+		t.Errorf("gid: got %d, want 9001 (default)", stat.Gid)
+	}
+}
+
 // TestChmodUpdatesMetadata verifies that chmod(2) through the mount writes
 // the new mode to the object's metadata, observable via HeadObject.
 func TestChmodUpdatesMetadata(t *testing.T) {
