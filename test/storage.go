@@ -7,7 +7,6 @@ import (
 	"io"
 	"iter"
 	"log/slog"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +17,23 @@ import (
 	"github.com/firetiger-oss/storage/internal/sequtil"
 	"github.com/firetiger-oss/storage/uri"
 )
+
+// assertMetadataContains fails the test unless every key in want is present in
+// got with the matching value. Extra keys in got are tolerated — backends with
+// native POSIX-permission semantics (notably file://) always surface "mode",
+// "uid" and "gid" from the underlying inode.
+func assertMetadataContains(t *testing.T, got, want map[string]string, msg string) {
+	t.Helper()
+	for k, v := range want {
+		actual, ok := got[k]
+		if !ok {
+			t.Fatalf("%s: missing key %q (got %v)", msg, k, got)
+		}
+		if actual != v {
+			t.Fatalf("%s: key %q got %q, want %q (full got=%v)", msg, k, actual, v, got)
+		}
+	}
+}
 
 func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, error)) {
 	adapters := []struct {
@@ -174,6 +190,16 @@ func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, erro
 		{
 			scenario: "DeleteObjects with an invalid path returns an error",
 			function: testStorageDeleteObjectsInvalidPath,
+		},
+
+		{
+			scenario: "trailing-slash keys round-trip through Put/Head/Delete",
+			function: testStorageDirKeyRoundTrip,
+		},
+
+		{
+			scenario: "a directory marker and regular children coexist",
+			function: testStorageDirKeyThenChild,
 		},
 
 		{
@@ -564,15 +590,22 @@ var InvalidPaths = []string{
 	"/a/b//",
 	"/a/b/c/",
 	"/a/b/c//",
-	"a/",
 	"a//",
-	"a/b/",
 	"a/..",
 	"a/../",
 	"../",
 	"./",
 	"a/.",
 	"a/./b",
+}
+
+// ValidDirKeys enumerates keys that are accepted as directory markers: a
+// single trailing "/" turns an otherwise valid path into a directory-like
+// object (the S3-console "folder" convention).
+var ValidDirKeys = []string{
+	"a/",
+	"a/b/",
+	"a/b/c/",
 }
 
 func testStorageGetObjectInvalidPath(t *testing.T, bucket storage.Bucket) {
@@ -798,6 +831,82 @@ func testStorageDeleteObjectInvalidPath(t *testing.T, bucket storage.Bucket) {
 		if err := bucket.DeleteObject(ctx, path); !errors.Is(err, storage.ErrInvalidObjectKey) {
 			t.Errorf("expected invalid path error: %s: %v", path, err)
 		}
+	}
+}
+
+// testStorageDirKeyRoundTrip exercises the contract that every backend
+// accepts trailing-slash keys (directory markers) for all CRUD operations.
+// It writes a zero-byte object at a "foo/" key with metadata, reads it back
+// via HeadObject and GetObject, and deletes it.
+func testStorageDirKeyRoundTrip(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	for _, key := range ValidDirKeys {
+		t.Run(key, func(t *testing.T) {
+			if _, err := bucket.PutObject(ctx, key, strings.NewReader(""),
+				storage.Metadata("custom", "value"),
+			); err != nil {
+				t.Fatalf("PutObject(%q): %v", key, err)
+			}
+
+			info, err := bucket.HeadObject(ctx, key)
+			if err != nil {
+				t.Fatalf("HeadObject(%q): %v", key, err)
+			}
+			if info.Size != 0 {
+				t.Errorf("size: got %d, want 0", info.Size)
+			}
+			if info.Metadata["custom"] != "value" {
+				t.Errorf("metadata[custom]: got %q, want %q", info.Metadata["custom"], "value")
+			}
+
+			rc, _, err := bucket.GetObject(ctx, key)
+			if err != nil {
+				t.Fatalf("GetObject(%q): %v", key, err)
+			}
+			rc.Close()
+
+			if err := bucket.DeleteObject(ctx, key); err != nil {
+				t.Errorf("DeleteObject(%q): %v", key, err)
+			}
+
+			if _, err := bucket.HeadObject(ctx, key); !errors.Is(err, storage.ErrObjectNotFound) {
+				t.Errorf("after delete, HeadObject(%q): got %v, want ErrObjectNotFound", key, err)
+			}
+		})
+	}
+}
+
+// testStorageDirKeyThenChild verifies that a directory marker and regular
+// children under the same prefix can coexist: create "d/", then write "d/a",
+// then read "d/a", then delete "d/a", then delete "d/".
+func testStorageDirKeyThenChild(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+
+	if _, err := bucket.PutObject(ctx, "d/", strings.NewReader("")); err != nil {
+		t.Fatalf("PutObject(d/): %v", err)
+	}
+	if _, err := bucket.PutObject(ctx, "d/a", strings.NewReader("child")); err != nil {
+		t.Fatalf("PutObject(d/a): %v", err)
+	}
+
+	rc, info, err := bucket.GetObject(ctx, "d/a")
+	if err != nil {
+		t.Fatalf("GetObject(d/a): %v", err)
+	}
+	defer rc.Close()
+	if info.Size != int64(len("child")) {
+		t.Errorf("child size: got %d, want %d", info.Size, len("child"))
+	}
+
+	if _, err := bucket.HeadObject(ctx, "d/"); err != nil {
+		t.Errorf("HeadObject(d/) after writing child: %v", err)
+	}
+
+	if err := bucket.DeleteObject(ctx, "d/a"); err != nil {
+		t.Errorf("DeleteObject(d/a): %v", err)
+	}
+	if err := bucket.DeleteObject(ctx, "d/"); err != nil {
+		t.Errorf("DeleteObject(d/): %v", err)
 	}
 }
 
@@ -1107,26 +1216,20 @@ func testStoragePutObjectMetadata(t *testing.T, bucket storage.Bucket) {
 	if err != nil {
 		t.Fatal("unexpected error writing object:", err)
 	}
-	if !maps.Equal(putObject.Metadata, metadata) {
-		t.Fatalf("PutObject returned different metadata: got %v, want %v", putObject.Metadata, metadata)
-	}
+	assertMetadataContains(t, putObject.Metadata, metadata, "PutObject metadata")
 
 	headObject, err := bucket.HeadObject(ctx, key)
 	if err != nil {
 		t.Fatal("unexpected error reading object metadata:", err)
 	}
-	if !maps.Equal(headObject.Metadata, metadata) {
-		t.Fatalf("HeadObject returned different metadata: got %v, want %v", headObject.Metadata, metadata)
-	}
+	assertMetadataContains(t, headObject.Metadata, metadata, "HeadObject metadata")
 
 	r, getObject, err := bucket.GetObject(ctx, key)
 	if err != nil {
 		t.Fatal("unexpected error reading object:", err)
 	}
 	defer r.Close()
-	if !maps.Equal(getObject.Metadata, metadata) {
-		t.Fatalf("GetObject returned different metadata: got %v, want %v", getObject.Metadata, metadata)
-	}
+	assertMetadataContains(t, getObject.Metadata, metadata, "GetObject metadata")
 }
 
 func testStorageHeadObjectNotFound(t *testing.T, bucket storage.Bucket) {
@@ -1836,9 +1939,7 @@ func testStorageCopyObjectPreservesMetadata(t *testing.T, bucket storage.Bucket)
 	if info.CacheControl != cacheControl {
 		t.Errorf("cache control not preserved: %q != %q", info.CacheControl, cacheControl)
 	}
-	if !maps.Equal(info.Metadata, metadata) {
-		t.Errorf("metadata not preserved: %v != %v", info.Metadata, metadata)
-	}
+	assertMetadataContains(t, info.Metadata, metadata, "CopyObject preserved metadata")
 }
 
 func testStorageCopyObjectOverridesMetadata(t *testing.T, bucket storage.Bucket) {

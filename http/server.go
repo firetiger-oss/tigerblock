@@ -360,11 +360,6 @@ func handlePUT(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		return
 	}
 
-	if strings.HasSuffix(r.URL.Path, "/") {
-		writeError(w, storage.ErrInvalidObjectKey)
-		return
-	}
-
 	options := make([]storage.PutOption, 0, 4)
 	options = appendIfNotEmpty(options, r.Header, "Cache-Control", storage.CacheControl)
 	options = appendIfNotEmpty(options, r.Header, "Content-Type", storage.ContentType)

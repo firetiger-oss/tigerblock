@@ -48,6 +48,13 @@ func (fsys *fileSystem) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
+	// Enforce the io/fs.FS contract: Open must reject any name where
+	// !fs.ValidPath(name). storage.ValidObjectKey is looser than fs.ValidPath
+	// (it accepts trailing-slash directory markers), so we re-apply the
+	// stricter fs.ValidPath check at this boundary.
+	if !fs.ValidPath(objectKey) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
 	var f fs.File
 	if objectKey == "." {
 		f = &dir{

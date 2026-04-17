@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,14 @@ const (
 	xattrMetadata        = "user.storage.metadata"
 	tempFileSuffix       = ".C848CADBC89F4F129E6249F61F11C78B.tmp"
 	tempFilePattern      = ".*" + tempFileSuffix
+
+	// POSIX permission keys exposed via ObjectInfo.Metadata. The file backend
+	// reflects them from the real inode instead of storing them in the JSON
+	// xattr blob, so that files touched outside this package still carry
+	// correct permissions, and `stat` is always the source of truth.
+	metadataKeyMode = "mode"
+	metadataKeyUID  = "uid"
+	metadataKeyGID  = "gid"
 )
 
 func init() {
@@ -107,7 +116,30 @@ func (b *Bucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo
 		return storage.ObjectInfo{}, err
 	}
 	defer f.Close()
-	return readObjectInfo(f)
+
+	info, stat, err := readObjectInfo(f)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	// Enforce the file/directory type implied by the trailing slash in the
+	// key. A bare key never matches a directory, and a trailing-slash key
+	// never matches a regular file — keeping the contract symmetric with
+	// stores like S3 where "foo" and "foo/" are distinct objects.
+	//
+	// Note: on the file backend the same inode serves both as the marker
+	// for "foo/" and as the container for "foo/a" children. Deleting "foo/"
+	// therefore fails with ENOTEMPTY when children exist, and implicit
+	// parent directories created as a side-effect of PutObject("foo/bar")
+	// are visible through HeadObject("foo/") — that is an accepted
+	// divergence; on this backend stat is always the truth.
+	wantDir := strings.HasSuffix(key, "/")
+	if wantDir != stat.IsDir() {
+		return storage.ObjectInfo{}, storage.ErrObjectNotFound
+	}
+	if wantDir {
+		info.Size = 0
+	}
+	return info, nil
 }
 
 func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
@@ -135,12 +167,22 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		}
 	}()
 
-	object, err := readObjectInfo(f)
+	object, stat, err := readObjectInfo(f)
 	if err != nil {
-		if errors.Is(err, syscall.EISDIR) {
-			err = storage.ErrObjectNotFound
-		}
 		return nil, storage.ObjectInfo{}, err
+	}
+
+	wantDir := strings.HasSuffix(key, "/")
+	if wantDir != stat.IsDir() {
+		return nil, storage.ObjectInfo{}, storage.ErrObjectNotFound
+	}
+	if wantDir {
+		// Directory markers have no body; return an empty reader and close
+		// the directory fd right away.
+		f.Close()
+		closeFile = false
+		object.Size = 0
+		return io.NopCloser(strings.NewReader("")), object, nil
 	}
 
 	getOptions := storage.NewGetOptions(options...)
@@ -168,6 +210,13 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	}
 	if err := b.stat(); err != nil {
 		return storage.ObjectInfo{}, err
+	}
+
+	// Trailing-slash keys are directory markers: materialize them as real
+	// directories on the filesystem, apply xattrs + mode/uid/gid on the dir
+	// inode, and discard any body bytes.
+	if strings.HasSuffix(key, "/") {
+		return b.putDir(key, options...)
 	}
 
 	path := b.path(key)
@@ -247,7 +296,7 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 		}
 		defer unix.Flock(currentFd, unix.LOCK_UN)
 
-		currentObjectInfo, err := readObjectInfo(currentObjectFile)
+		currentObjectInfo, _, err := readObjectInfo(currentObjectFile)
 		if err != nil {
 			return storage.ObjectInfo{}, err
 		}
@@ -266,6 +315,68 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	object.Size = s.Size()
 	object.LastModified = s.ModTime()
 	return object, nil
+}
+
+// putDir materializes a trailing-slash key as a real directory and applies
+// metadata (mode/uid/gid as fchmod/fchown, custom keys as an xattr JSON blob).
+// The body passed to PutObject is ignored — directory markers have no content.
+//
+// Conditional PUTs:
+//   - IfNoneMatch="*" fails with ErrObjectNotMatch if the directory already
+//     exists, matching the "create only" semantics used for regular objects.
+//   - IfNoneMatch with any other value is rejected as ErrInvalidObjectTag, to
+//     match the regular-object path (only "*" is meaningful for create-only).
+//   - IfMatch is not supported on markers (there is no meaningful body-derived
+//     ETag for a directory inode); passing one returns ErrInvalidObjectTag.
+func (b *Bucket) putDir(key string, options ...storage.PutOption) (storage.ObjectInfo, error) {
+	putOptions := storage.NewPutOptions(options...)
+
+	ifMatch := putOptions.IfMatch()
+	ifNoneMatch := putOptions.IfNoneMatch()
+	if ifMatch != "" {
+		return storage.ObjectInfo{}, storage.ErrInvalidObjectTag
+	}
+	switch ifNoneMatch {
+	case "", "*":
+	default:
+		return storage.ObjectInfo{}, storage.ErrInvalidObjectTag
+	}
+
+	path := b.path(key)
+	if ifNoneMatch == "*" {
+		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+			return storage.ObjectInfo{}, storage.ErrObjectNotMatch
+		} else if err != nil && !isErrNotExist(err) {
+			return storage.ObjectInfo{}, err
+		}
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return storage.ObjectInfo{}, err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	defer f.Close()
+
+	object := storage.ObjectInfo{
+		CacheControl:    putOptions.CacheControl(),
+		ContentType:     putOptions.ContentType(),
+		ContentEncoding: putOptions.ContentEncoding(),
+		Metadata:        putOptions.Metadata(),
+	}
+
+	if err := writeObjectInfo(f, object); err != nil {
+		return storage.ObjectInfo{}, err
+	}
+
+	final, _, err := readObjectInfo(f)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	final.Size = 0
+	return final, nil
 }
 
 func (b *Bucket) DeleteObject(ctx context.Context, key string) error {
@@ -331,7 +442,14 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 		return err
 	}
 
-	// Open source file
+	// Same-key copies (typical chmod/chown/metadata-only updates from fuse)
+	// are applied in place without rewriting the bytes: chmod, chown, and
+	// xattr writes all act directly on the existing inode.
+	if from == to {
+		return b.updateObjectInPlace(to, options...)
+	}
+
+	// Open source file/directory.
 	srcPath := b.path(from)
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
@@ -342,13 +460,28 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	}
 	defer srcFile.Close()
 
-	// Read source metadata
-	srcInfo, err := readObjectInfo(srcFile)
+	// Read source metadata and detect whether the inode is a directory.
+	srcInfo, srcStat, err := readObjectInfo(srcFile)
 	if err != nil {
 		if errors.Is(err, syscall.EISDIR) {
 			err = storage.ErrObjectNotFound
 		}
 		return err
+	}
+
+	// A trailing slash in the key means "this is a directory marker". The
+	// file backend stores markers as real directories, so the source inode
+	// type must agree with the key shape on both ends of the copy.
+	srcIsDir := strings.HasSuffix(from, "/")
+	dstIsDir := strings.HasSuffix(to, "/")
+	if srcIsDir != srcStat.IsDir() {
+		return storage.ErrObjectNotFound
+	}
+	if srcIsDir != dstIsDir {
+		// A directory cannot be copied to a regular key (or vice versa) on a
+		// POSIX filesystem; return an invalid-key error rather than producing
+		// a silently nonsensical destination.
+		return storage.ErrInvalidObjectKey
 	}
 
 	// Build merged options (source metadata with overrides)
@@ -381,6 +514,14 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 		mergedOpts = append(mergedOpts, storage.Metadata(k, v))
 	}
 
+	if srcIsDir {
+		// Directory markers have no body — route straight to putDir, which
+		// materializes the destination directory and applies metadata without
+		// trying to read from the source fd.
+		_, err = b.putDir(to, mergedOpts...)
+		return err
+	}
+
 	// Reset file position for reading content
 	if _, err := srcFile.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -389,6 +530,69 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	// Use PutObject for the copy (handles temp file, directories, etc.)
 	_, err = b.PutObject(ctx, to, srcFile, mergedOpts...)
 	return err
+}
+
+// updateObjectInPlace applies PutOption overrides (content-type, metadata,
+// POSIX permissions) to an existing object without rewriting its bytes.
+func (b *Bucket) updateObjectInPlace(key string, options ...storage.PutOption) error {
+	f, err := os.OpenFile(b.path(key), os.O_RDONLY, 0)
+	if err != nil {
+		if isErrNotExist(err) {
+			err.(*os.PathError).Err = storage.ErrObjectNotFound
+		}
+		return err
+	}
+	defer f.Close()
+
+	currentInfo, _, err := readObjectInfo(f)
+	if err != nil {
+		if errors.Is(err, syscall.EISDIR) {
+			err = storage.ErrObjectNotFound
+		}
+		return err
+	}
+
+	putOptions := storage.NewPutOptions(options...)
+
+	// Apply the same conditional-copy semantics as a full byte-copy: same-key
+	// updates are an existing-target overwrite, so IfNoneMatch="*" must fail
+	// (the target, which is also the source, exists by precondition), and
+	// IfMatch must agree with the current ETag.
+	if ifMatch := putOptions.IfMatch(); ifMatch != "" {
+		if currentInfo.ETag != ifMatch {
+			return storage.ErrObjectNotMatch
+		}
+	}
+	switch putOptions.IfNoneMatch() {
+	case "":
+	case "*":
+		return storage.ErrObjectNotMatch
+	default:
+		return storage.ErrInvalidObjectTag
+	}
+
+	newInfo := currentInfo
+	if cc := putOptions.CacheControl(); cc != "" {
+		newInfo.CacheControl = cc
+	}
+	if ct := putOptions.ContentType(); ct != "application/octet-stream" {
+		newInfo.ContentType = ct
+	}
+	if ce := putOptions.ContentEncoding(); ce != "" {
+		newInfo.ContentEncoding = ce
+	}
+	if overrides := putOptions.Metadata(); len(overrides) > 0 {
+		merged := make(map[string]string, len(currentInfo.Metadata)+len(overrides))
+		for k, v := range currentInfo.Metadata {
+			merged[k] = v
+		}
+		for k, v := range overrides {
+			merged[k] = v
+		}
+		newInfo.Metadata = merged
+	}
+
+	return writeObjectInfo(f, newInfo)
 }
 
 func (b *Bucket) ListObjects(ctx context.Context, options ...storage.ListOption) iter.Seq2[storage.Object, error] {
@@ -699,10 +903,13 @@ func (b *Bucket) removeEmptyDirectories(dir string) {
 	}
 }
 
-func readObjectInfo(f *os.File) (storage.ObjectInfo, error) {
+// readObjectInfo returns the ObjectInfo for the given open file/dir descriptor
+// along with the underlying fs.FileInfo so callers can distinguish files from
+// directory markers without re-stat'ing.
+func readObjectInfo(f *os.File) (storage.ObjectInfo, fs.FileInfo, error) {
 	s, err := f.Stat()
 	if err != nil {
-		return storage.ObjectInfo{}, err
+		return storage.ObjectInfo{}, nil, err
 	}
 
 	object := storage.ObjectInfo{
@@ -722,7 +929,7 @@ func readObjectInfo(f *os.File) (storage.ObjectInfo, error) {
 		if err == nil && size > 0 {
 			*value = string(fb[:size])
 		} else if err != nil && !isErrAttrNotExist(err) {
-			return storage.ObjectInfo{}, fmt.Errorf("%s: reading %s: %w", f.Name(), attr, err)
+			return storage.ObjectInfo{}, nil, fmt.Errorf("%s: reading %s: %w", f.Name(), attr, err)
 		}
 	}
 
@@ -730,16 +937,29 @@ func readObjectInfo(f *os.File) (storage.ObjectInfo, error) {
 		data := make([]byte, size)
 		n, err := unix.Fgetxattr(fd, xattrMetadata, data)
 		if err != nil {
-			return storage.ObjectInfo{}, fmt.Errorf("%s: reading metadata xattr: %w", f.Name(), err)
+			return storage.ObjectInfo{}, nil, fmt.Errorf("%s: reading metadata xattr: %w", f.Name(), err)
 		}
 		if err := json.Unmarshal(data[:n], &object.Metadata); err != nil {
-			return storage.ObjectInfo{}, fmt.Errorf("%s: parsing metadata: %w", f.Name(), err)
+			return storage.ObjectInfo{}, nil, fmt.Errorf("%s: parsing metadata: %w", f.Name(), err)
 		}
 	} else if err != nil && !isErrAttrNotExist(err) {
-		return storage.ObjectInfo{}, fmt.Errorf("%s: checking metadata xattr size: %w", f.Name(), err)
+		return storage.ObjectInfo{}, nil, fmt.Errorf("%s: checking metadata xattr size: %w", f.Name(), err)
 	}
 
-	return object, nil
+	// Overlay POSIX permissions from the real inode so that `stat` is the
+	// single source of truth. Any mode/uid/gid keys that happen to be in the
+	// JSON blob (e.g. from pre-migration files or external writers) are
+	// discarded in favor of what the kernel reports.
+	if stat, ok := s.Sys().(*syscall.Stat_t); ok {
+		if object.Metadata == nil {
+			object.Metadata = make(map[string]string, 3)
+		}
+		object.Metadata[metadataKeyMode] = strconv.FormatUint(uint64(stat.Mode)&0o7777, 8)
+		object.Metadata[metadataKeyUID] = strconv.FormatUint(uint64(stat.Uid), 10)
+		object.Metadata[metadataKeyGID] = strconv.FormatUint(uint64(stat.Gid), 10)
+	}
+
+	return object, s, nil
 }
 
 func writeObjectInfo(f *os.File, object storage.ObjectInfo) error {
@@ -757,8 +977,41 @@ func writeObjectInfo(f *os.File, object storage.ObjectInfo) error {
 		}
 	}
 
-	if object.Metadata != nil {
-		metadata, err := json.Marshal(object.Metadata)
+	// Apply POSIX permissions to the real inode when present. Use a separate
+	// map so we don't mutate the caller's. Strip them from the JSON blob —
+	// readObjectInfo reconstructs them from stat and we want a single source
+	// of truth.
+	var jsonMetadata map[string]string
+	for k, v := range object.Metadata {
+		switch k {
+		case metadataKeyMode:
+			if mode, err := strconv.ParseUint(v, 8, 32); err == nil {
+				if err := unix.Fchmod(fd, uint32(mode)&0o7777); err != nil {
+					return fmt.Errorf("fchmod: %w", err)
+				}
+			}
+		case metadataKeyUID:
+			if uid, err := strconv.ParseUint(v, 10, 32); err == nil {
+				if err := unix.Fchown(fd, int(uid), -1); err != nil {
+					return fmt.Errorf("fchown uid: %w", err)
+				}
+			}
+		case metadataKeyGID:
+			if gid, err := strconv.ParseUint(v, 10, 32); err == nil {
+				if err := unix.Fchown(fd, -1, int(gid)); err != nil {
+					return fmt.Errorf("fchown gid: %w", err)
+				}
+			}
+		default:
+			if jsonMetadata == nil {
+				jsonMetadata = make(map[string]string, len(object.Metadata))
+			}
+			jsonMetadata[k] = v
+		}
+	}
+
+	if jsonMetadata != nil {
+		metadata, err := json.Marshal(jsonMetadata)
 		if err != nil {
 			return fmt.Errorf("marshaling metadata: %w", err)
 		}

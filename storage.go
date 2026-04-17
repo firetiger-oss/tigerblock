@@ -640,11 +640,36 @@ func Location(location, path string) string {
 	return uri.Join(scheme, location, base, path)
 }
 
+// ValidObjectKey reports whether key is a legal object key. The rules mirror
+// io/fs.ValidPath (UTF-8, no leading slash, no empty / "." / ".." segments)
+// with one deliberate relaxation: a single trailing "/" is allowed, used by
+// object stores (S3, GCS, ...) as a directory-marker convention and by the
+// fuse package to persist per-directory permissions.
+//
+// The success path is zero-allocation; allocations only happen when building
+// the wrapped error on rejection. See BenchmarkValidObjectKey.
 func ValidObjectKey(key string) error {
-	if !fs.ValidPath(key) {
-		return fmt.Errorf("%w (%s)", ErrInvalidObjectKey, key)
+	if validObjectKey(key) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%w (%s)", ErrInvalidObjectKey, key)
+}
+
+func validObjectKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	// Allow exactly one trailing "/" (directory marker). Strip it and fall
+	// through to the regular path validation below.
+	if key[len(key)-1] == '/' {
+		key = key[:len(key)-1]
+		// Reject "/" alone and "./" — fs.ValidPath treats "." as the valid
+		// FS root, but "./" has always been an invalid object key.
+		if key == "" || key == "." {
+			return false
+		}
+	}
+	return fs.ValidPath(key)
 }
 
 func ValidObjectRange(key string, start, end int64) error {

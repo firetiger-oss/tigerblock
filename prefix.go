@@ -40,18 +40,30 @@ func (b *prefixedBucket) Create(ctx context.Context) error {
 }
 
 func (b *prefixedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return ObjectInfo{}, err
+	}
 	return b.bucket.HeadObject(ctx, b.prefix+key)
 }
 
 func (b *prefixedBucket) GetObject(ctx context.Context, key string, options ...GetOption) (io.ReadCloser, ObjectInfo, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return nil, ObjectInfo{}, err
+	}
 	return b.bucket.GetObject(ctx, b.prefix+key, options...)
 }
 
 func (b *prefixedBucket) PutObject(ctx context.Context, key string, value io.Reader, options ...PutOption) (ObjectInfo, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return ObjectInfo{}, err
+	}
 	return b.bucket.PutObject(ctx, b.prefix+key, value, options...)
 }
 
 func (b *prefixedBucket) DeleteObject(ctx context.Context, key string) error {
+	if err := ValidObjectKey(key); err != nil {
+		return err
+	}
 	return b.bucket.DeleteObject(ctx, b.prefix+key)
 }
 
@@ -59,6 +71,14 @@ func (b *prefixedBucket) DeleteObjects(ctx context.Context, objects iter.Seq2[st
 	return func(yield func(string, error) bool) {
 		for key, err := range b.bucket.DeleteObjects(ctx, func(yield func(string, error) bool) {
 			for key, err := range objects {
+				// Validate the user-facing key before prefixing so invalid
+				// inputs are rejected uniformly — after concatenation a
+				// trailing-slash prefix can turn an invalid user key (e.g. "")
+				// into a valid one at the backend, which would bypass the
+				// rejection.
+				if err == nil {
+					err = ValidObjectKey(key)
+				}
 				if !yield(b.prefix+key, err) {
 					return
 				}
@@ -72,6 +92,12 @@ func (b *prefixedBucket) DeleteObjects(ctx context.Context, objects iter.Seq2[st
 }
 
 func (b *prefixedBucket) CopyObject(ctx context.Context, from, to string, options ...PutOption) error {
+	if err := ValidObjectKey(from); err != nil {
+		return err
+	}
+	if err := ValidObjectKey(to); err != nil {
+		return err
+	}
 	return b.bucket.CopyObject(ctx, b.prefix+from, b.prefix+to, options...)
 }
 
@@ -127,17 +153,29 @@ func (b *prefixedBucket) listOptions(options ...ListOption) []ListOption {
 }
 
 func (b *prefixedBucket) PresignGetObject(ctx context.Context, key string, expiration time.Duration, options ...GetOption) (string, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return "", err
+	}
 	return b.bucket.PresignGetObject(ctx, b.prefix+key, expiration, options...)
 }
 
 func (b *prefixedBucket) PresignPutObject(ctx context.Context, key string, expiration time.Duration, options ...PutOption) (string, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return "", err
+	}
 	return b.bucket.PresignPutObject(ctx, b.prefix+key, expiration, options...)
 }
 
 func (b *prefixedBucket) PresignHeadObject(ctx context.Context, key string, expiration time.Duration) (string, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return "", err
+	}
 	return b.bucket.PresignHeadObject(ctx, b.prefix+key, expiration)
 }
 
 func (b *prefixedBucket) PresignDeleteObject(ctx context.Context, key string, expiration time.Duration) (string, error) {
+	if err := ValidObjectKey(key); err != nil {
+		return "", err
+	}
 	return b.bucket.PresignDeleteObject(ctx, b.prefix+key, expiration)
 }

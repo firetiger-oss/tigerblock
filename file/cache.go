@@ -237,7 +237,7 @@ func (b *cachedBucket) HeadObject(ctx context.Context, key string) (storage.Obje
 	f, err := os.Open(filePath)
 	if err == nil {
 		defer f.Close()
-		if info, err := readObjectInfo(f); err == nil {
+		if info, _, err := readObjectInfo(f); err == nil {
 			// Check if the cached object has expired
 			if fileInfo, err := f.Stat(); err == nil && !isObjectExpired(info, fileInfo) {
 				b.lookup(f.Name())
@@ -298,7 +298,7 @@ func (b *cachedBucket) GetObject(ctx context.Context, key string, options ...sto
 		}
 	}()
 
-	cachedInfo, err = readObjectInfo(cachedFile)
+	cachedInfo, _, err = readObjectInfo(cachedFile)
 	if err != nil {
 		goto headObject
 	}

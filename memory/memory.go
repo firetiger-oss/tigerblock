@@ -284,7 +284,7 @@ func (b *Bucket) DeleteObject(ctx context.Context, key string) error {
 func (b *Bucket) DeleteObjects(ctx context.Context, objects iter.Seq2[string, error]) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
 		for key, err := range objects {
-			err = cmp.Or(context.Cause(ctx), storage.ValidObjectKey(key))
+			err = cmp.Or(err, context.Cause(ctx), storage.ValidObjectKey(key))
 			if err == nil {
 				b.mutex.Lock()
 				delete(b.objects, key)

@@ -92,7 +92,7 @@ func (e *errorBucket) PresignDeleteObject(ctx context.Context, key string, exp t
 func mountBucket(t *testing.T, bucket storage.Bucket) string {
 	t.Helper()
 	dir := t.TempDir()
-	server, err := storagefuse.Mount(dir, bucket, nil)
+	server, err := storagefuse.Mount(dir, bucket)
 	if err != nil {
 		t.Skipf("FUSE not available: %v", err)
 	}

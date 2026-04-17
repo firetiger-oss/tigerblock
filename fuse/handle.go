@@ -39,10 +39,17 @@ func (h *readHandle) Read(ctx context.Context, dest []byte, off int64) (gofuse.R
 // writeHandle is returned for O_WRONLY / O_RDWR / O_CREAT opens. It uses a
 // temporary file so that both reads and writes are consistent (copy-on-open
 // model), and the file is uploaded to the bucket on Flush.
+//
+// opts captures PutOption values to apply at Flush time. They cover two
+// sources:
+//   - preserved metadata from an existing object (captured on copy-on-open)
+//   - overrides from dirNode.Create (initial mode/uid/gid) and from Setattr
+//     calls against an open handle.
 type writeHandle struct {
 	bucket storage.Bucket
 	key    string
 	tmp    *os.File
+	opts   []storage.PutOption
 	dirty  bool
 }
 
@@ -54,16 +61,19 @@ var _ gofs.FileReleaser = (*writeHandle)(nil)
 // newWriteHandle creates a write handle for key. If the open flags do not
 // include O_TRUNC and the object already exists, its current content is
 // downloaded into the temp file first so that reads and partial writes are
-// consistent.
-func newWriteHandle(ctx context.Context, bucket storage.Bucket, key string, flags uint32) (*writeHandle, error) {
+// consistent. When the object exists, its metadata is captured into opts so
+// it survives the eventual Flush. Additional initialOpts are appended on top
+// — used by dirNode.Create to record the caller-requested mode/uid/gid.
+func newWriteHandle(ctx context.Context, bucket storage.Bucket, key string, flags uint32, initialOpts ...storage.PutOption) (*writeHandle, error) {
 	tmp, err := os.CreateTemp("", ".fuse.*")
 	if err != nil {
 		return nil, err
 	}
 
+	var opts []storage.PutOption
 	truncating := flags&uint32(syscall.O_TRUNC) != 0 || flags&uint32(syscall.O_CREAT) != 0
 	if !truncating {
-		rc, _, err := bucket.GetObject(ctx, key)
+		rc, info, err := bucket.GetObject(ctx, key)
 		switch {
 		case err == nil:
 			if _, err = io.Copy(tmp, rc); err != nil {
@@ -78,6 +88,7 @@ func newWriteHandle(ctx context.Context, bucket storage.Bucket, key string, flag
 				os.Remove(tmp.Name())
 				return nil, err
 			}
+			opts = objectInfoToPutOptions(info)
 		case errors.Is(err, storage.ErrObjectNotFound):
 			// Opening a file that doesn't exist yet is fine; start with an empty buffer.
 		default:
@@ -87,7 +98,8 @@ func newWriteHandle(ctx context.Context, bucket storage.Bucket, key string, flag
 		}
 	}
 
-	return &writeHandle{bucket: bucket, key: key, tmp: tmp}, nil
+	opts = append(opts, initialOpts...)
+	return &writeHandle{bucket: bucket, key: key, tmp: tmp, opts: opts}, nil
 }
 
 func (h *writeHandle) Read(ctx context.Context, dest []byte, off int64) (gofuse.ReadResult, syscall.Errno) {
@@ -114,7 +126,7 @@ func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
 	if _, err := h.tmp.Seek(0, io.SeekStart); err != nil {
 		return syscall.EIO
 	}
-	if _, err := h.bucket.PutObject(ctx, h.key, h.tmp); err != nil {
+	if _, err := h.bucket.PutObject(ctx, h.key, h.tmp, h.opts...); err != nil {
 		return makeErrno(err)
 	}
 	h.dirty = false

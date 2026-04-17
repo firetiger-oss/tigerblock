@@ -685,7 +685,53 @@ func TestListObjects(t *testing.T) {
 func TestValidObjectKey(t *testing.T) {
 	for _, path := range storagetest.InvalidPaths {
 		if err := storage.ValidObjectKey(path); !errors.Is(err, storage.ErrInvalidObjectKey) {
-			t.Errorf("expected invalid object key error: %v", err)
+			t.Errorf("expected invalid object key error for %q: %v", path, err)
+		}
+	}
+	for _, path := range storagetest.ValidDirKeys {
+		if err := storage.ValidObjectKey(path); err != nil {
+			t.Errorf("expected %q to be valid, got: %v", path, err)
+		}
+	}
+}
+
+func BenchmarkValidObjectKey(b *testing.B) {
+	for _, tc := range []struct {
+		name, key string
+	}{
+		{"short", "foo.txt"},
+		{"nested", "a/b/c/d.txt"},
+		{"dir-marker", "a/b/"},
+		{"long", "some/deeply/nested/path/to/an/object/with/a/long/key.ext"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := storage.ValidObjectKey(tc.key); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// TestValidObjectKeyZeroAllocations asserts that the happy path allocates
+// nothing per call. Regressions here typically indicate an accidental string
+// copy or interface boxing in the validator.
+func TestValidObjectKeyZeroAllocations(t *testing.T) {
+	for _, key := range []string{
+		"foo.txt",
+		"a/b/c/d.txt",
+		"a/b/",
+		"some/deeply/nested/path/to/an/object/with/a/long/key.ext",
+	} {
+		allocs := testing.AllocsPerRun(100, func() {
+			if err := storage.ValidObjectKey(key); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if allocs != 0 {
+			t.Errorf("ValidObjectKey(%q): got %v allocs/op, want 0", key, allocs)
 		}
 	}
 }
