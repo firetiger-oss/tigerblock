@@ -24,6 +24,14 @@ func isTemporaryError(err error) bool {
 }
 
 func logLevelOf(err error) slog.Level {
+	// A canceled context is almost always a caller-driven early termination
+	// (DuckDB closing a parquet reader after pruning a row group, a client
+	// aborting a stream, etc.), not a storage failure. Demote to DEBUG so it
+	// doesn't drown out real errors. DeadlineExceeded is intentionally left
+	// at ERROR — that one means a timeout actually fired.
+	if errors.Is(err, context.Canceled) {
+		return slog.LevelDebug
+	}
 	if isExpectedError(err) {
 		return slog.LevelDebug
 	}
