@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -731,9 +733,29 @@ func TestCacheConcurrentWritesInFlight(t *testing.T) {
 		}
 	}
 
-	// The committed cache size must not exceed the configured limit.
+	// The LRU-tracked size must not exceed the configured limit.
 	stat := cache.Stat()
 	if stat.Size > stat.Limit {
 		t.Errorf("cache size %d exceeds limit %d after concurrent writes", stat.Size, stat.Limit)
+	}
+
+	// And the actual on-disk footprint must also be bounded. Without the
+	// in-flight + LRU-insert machinery these 50 writes would accumulate
+	// ~50 KiB on a 4 KiB cache; with it, eviction keeps disk usage within
+	// the limit once all in-flight writes have committed.
+	var onDisk int64
+	if err := filepath.Walk(cacheDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			onDisk += info.Size()
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk cacheDir: %v", err)
+	}
+	if onDisk > stat.Limit {
+		t.Errorf("on-disk cache size %d exceeds limit %d after concurrent writes", onDisk, stat.Limit)
 	}
 }
