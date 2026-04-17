@@ -277,7 +277,10 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	switch {
 	case ifNoneMatch != "":
 		if err := renameIfNotExist(temp.Name(), path); err != nil {
-			return storage.ObjectInfo{}, storage.ErrObjectNotMatch
+			if errors.Is(err, fs.ErrExist) {
+				return storage.ObjectInfo{}, storage.ErrObjectNotMatch
+			}
+			return storage.ObjectInfo{}, err
 		}
 
 	case ifMatch != "":

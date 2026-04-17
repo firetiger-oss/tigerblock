@@ -1,6 +1,7 @@
 package file_test
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -80,5 +81,40 @@ func TestFileStoragePutObjectContent(t *testing.T) {
 
 	if getObject.Size != putObject.Size {
 		t.Errorf("size mismatch: PutObject size = %d, GetObject size = %d", putObject.Size, getObject.Size)
+	}
+}
+
+func TestFileStoragePutObjectIfNoneMatch(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "bucket")
+	bucket, err := file.NewRegistry(root).LoadBucket(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bucket.Create(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	const key = "atomic.txt"
+
+	if _, err := bucket.PutObject(t.Context(), key, strings.NewReader("first"), storage.IfNoneMatch("*")); err != nil {
+		t.Fatalf("first create should succeed: %v", err)
+	}
+
+	_, err = bucket.PutObject(t.Context(), key, strings.NewReader("second"), storage.IfNoneMatch("*"))
+	if !errors.Is(err, storage.ErrObjectNotMatch) {
+		t.Fatalf("second create should return ErrObjectNotMatch, got %v", err)
+	}
+
+	r, _, err := bucket.GetObject(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "first" {
+		t.Errorf("expected original content preserved, got %q", got)
 	}
 }
