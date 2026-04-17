@@ -411,8 +411,8 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		if closeFile {
 			f.Close()
 			os.Remove(f.Name())
-		} else {
-			os.Rename(f.Name(), filePath)
+		} else if err := os.Rename(f.Name(), filePath); err == nil {
+			b.insert(filePath, info.Size)
 		}
 	}()
 
@@ -444,7 +444,6 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		body = bytesRangeReadCloser(f, start, end)
 	}
 
-	b.lookup(f.Name())
 	closeFile = false
 	return body, info, nil
 }
