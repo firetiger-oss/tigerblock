@@ -86,7 +86,7 @@ func (s *store) Push(ctx context.Context, expected ocispec.Descriptor, content i
 		return err
 	}
 	if err := s.ensureLayout(ctx); err != nil {
-		return err
+		return makeError(err)
 	}
 
 	// Content-addressable: same digest ⇒ same bytes. If the blob is already
@@ -96,7 +96,7 @@ func (s *store) Push(ctx context.Context, expected ocispec.Descriptor, content i
 		_, _ = io.Copy(io.Discard, content)
 		return nil
 	} else if !errors.Is(err, storage.ErrObjectNotFound) {
-		return err
+		return makeError(err)
 	}
 
 	raw, err := hex.DecodeString(expected.Digest.Encoded())

@@ -291,6 +291,39 @@ func TestTagRejectsUnknownBlob(t *testing.T) {
 // Push must reject non-SHA256 digests as unsupported. SHA-384 and SHA-512
 // are valid OCI algorithms but are not used in practice and we intentionally
 // don't carry a fallback verification path for them.
+// Regression: Push's preflight (ensureLayout, HeadObject for dedup)
+// used to leak raw storage sentinels. Callers that errors.Is against
+// errdef sentinels would silently miss those failure modes even though
+// the post-preflight upload path mapped them correctly.
+func TestPushPreflightErrorsTranslated(t *testing.T) {
+	body := []byte("preflight")
+	desc := descriptorFor(body, "application/octet-stream")
+
+	t.Run("ensureLayout failure → errdef.ErrUnsupported", func(t *testing.T) {
+		// Read-only on every PutObject — ensureLayout is the first
+		// PutObject in Push.
+		bucket := &readOnlyOnPutBucket{Bucket: memory.NewBucket()}
+		target := storageoras.New(bucket)
+
+		err := target.Push(t.Context(), desc, bytes.NewReader(body))
+		if !errors.Is(err, errdef.ErrUnsupported) {
+			t.Fatalf("Push = %v; want errors.Is(err, errdef.ErrUnsupported)", err)
+		}
+	})
+
+	t.Run("HeadObject failure → errdef.ErrNotFound", func(t *testing.T) {
+		// Non-NotFound HeadObject error (here: ErrBucketNotFound)
+		// — Push's dedup check was returning the raw storage error.
+		bucket := &headFailingBucket{Bucket: memory.NewBucket(), err: storage.ErrBucketNotFound}
+		target := storageoras.New(bucket)
+
+		err := target.Push(t.Context(), desc, bytes.NewReader(body))
+		if !errors.Is(err, errdef.ErrNotFound) {
+			t.Fatalf("Push = %v; want errors.Is(err, errdef.ErrNotFound)", err)
+		}
+	})
+}
+
 func TestPushNonSHA256Unsupported(t *testing.T) {
 	ctx := t.Context()
 	target := storageoras.New(memory.NewBucket())
@@ -615,6 +648,28 @@ func mustMarshalJSON(t *testing.T, v any) []byte {
 		t.Fatalf("marshal: %v", err)
 	}
 	return body
+}
+
+// readOnlyOnPutBucket fails every PutObject with ErrBucketReadOnly,
+// used to drive ensureLayout's preflight error path.
+type readOnlyOnPutBucket struct {
+	storage.Bucket
+}
+
+func (b *readOnlyOnPutBucket) PutObject(ctx context.Context, key string, value io.Reader, options ...storage.PutOption) (storage.ObjectInfo, error) {
+	_, _ = io.Copy(io.Discard, value)
+	return storage.ObjectInfo{}, storage.ErrBucketReadOnly
+}
+
+// headFailingBucket returns a fixed error from HeadObject, used to
+// drive Push's dedup-check error path.
+type headFailingBucket struct {
+	storage.Bucket
+	err error
+}
+
+func (b *headFailingBucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, b.err
 }
 
 // countingBucket counts PutObject calls (and per-key for the layout marker).
