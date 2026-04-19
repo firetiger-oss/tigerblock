@@ -26,22 +26,30 @@ func (c *TTL[K, V]) Drop(ks ...K) {
 }
 
 func (c *TTL[K, V]) Load(key K, now time.Time, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
+	return c.LoadCloneKey(key, now, passthrough[K], fetch)
+}
+
+func (c *TTL[K, V]) LoadCloneKey(key K, now time.Time, clone func(K) K, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
 	c.mutex.Lock()
 	entry, ok := c.cache.Lookup(key)
 	if ok && (entry.expire.IsZero() || !now.After(entry.expire)) {
 		c.mutex.Unlock()
 		return entry.value, entry.expire, nil
 	}
-	return c.fetchLocked(key, fetch)
+	return c.fetchLocked(key, clone, fetch)
 }
 
 func (c *TTL[K, V]) Reload(key K, now time.Time, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
-	c.mutex.Lock()
-	return c.fetchLocked(key, fetch)
+	return c.ReloadCloneKey(key, now, passthrough[K], fetch)
 }
 
-func (c *TTL[K, V]) fetchLocked(key K, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
-	promise := c.lru().fetchLocked(key, func() (int64, ttlEntry[V], error) {
+func (c *TTL[K, V]) ReloadCloneKey(key K, now time.Time, clone func(K) K, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
+	c.mutex.Lock()
+	return c.fetchLocked(key, clone, fetch)
+}
+
+func (c *TTL[K, V]) fetchLocked(key K, clone func(K) K, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
+	promise := c.lru().fetchLocked(key, clone, func() (int64, ttlEntry[V], error) {
 		size, value, expire, err := fetch()
 		if err != nil {
 			return 0, ttlEntry[V]{}, err

@@ -75,28 +75,39 @@ func (c *LRU[K, V]) Drop(ks ...K) {
 // from fetch are stored on the Promise, propagated to all waiters via Wait,
 // and re-panicked on the originating goroutine.
 func (c *LRU[K, V]) Get(k K, fetch func() (int64, V, error)) *Promise[V] {
+	return c.GetCloneKey(k, passthrough[K], fetch)
+}
+
+// GetCloneKey behaves like Get but invokes clone(k) to produce the key that
+// is retained in the cache and inflight map on a miss. The caller's k is only
+// used for value-comparison lookups and may be backed by transient memory
+// that is reused after the call returns.
+func (c *LRU[K, V]) GetCloneKey(k K, clone func(K) K, fetch func() (int64, V, error)) *Promise[V] {
 	c.mutex.Lock()
 	if v, ok := c.cache.Lookup(k); ok {
 		c.mutex.Unlock()
 		return &Promise[V]{ready: ready, value: v}
 	}
-	return c.fetchLocked(k, fetch)
+	return c.fetchLocked(k, clone, fetch)
 }
 
 // fetchLocked is called with c.mutex held. It releases the lock before
 // returning. If an inflight fetch for k already exists, the existing Promise
-// is returned; otherwise the calling goroutine executes fetch inline.
-func (c *LRU[K, V]) fetchLocked(k K, fetch func() (int64, V, error)) *Promise[V] {
+// is returned; otherwise the calling goroutine executes fetch inline. clone
+// is invoked once on a fresh fetch to produce the key stored in the inflight
+// map and in the underlying LRU.
+func (c *LRU[K, V]) fetchLocked(k K, clone func(K) K, fetch func() (int64, V, error)) *Promise[V] {
 	if p := c.inflight[k]; p != nil {
 		c.mutex.Unlock()
 		return p
 	}
+	stored := clone(k)
 	readyCh := make(chan struct{})
 	p := &Promise[V]{ready: readyCh}
 	if c.inflight == nil {
 		c.inflight = make(map[K]*Promise[V])
 	}
-	c.inflight[k] = p
+	c.inflight[stored] = p
 	c.mutex.Unlock()
 
 	var (
@@ -108,12 +119,12 @@ func (c *LRU[K, V]) fetchLocked(k K, fetch func() (int64, V, error)) *Promise[V]
 		r := recover()
 		c.mutex.Lock()
 		if r == nil && err == nil && size < (c.Limit/2) {
-			c.cache.Insert(k, v, size)
+			c.cache.Insert(stored, v, size)
 			for c.cache.Size > c.Limit {
 				c.cache.Evict()
 			}
 		}
-		delete(c.inflight, k)
+		delete(c.inflight, stored)
 		c.mutex.Unlock()
 		if r != nil {
 			p.panic = r
@@ -131,6 +142,10 @@ func (c *LRU[K, V]) fetchLocked(k K, fetch func() (int64, V, error)) *Promise[V]
 
 func (c *LRU[K, V]) Load(k K, fetch func() (int64, V, error)) (V, error) {
 	return c.Get(k, fetch).Wait()
+}
+
+func (c *LRU[K, V]) LoadCloneKey(k K, clone func(K) K, fetch func() (int64, V, error)) (V, error) {
+	return c.GetCloneKey(k, clone, fetch).Wait()
 }
 
 func (c *LRU[K, V]) Peek(k K) (V, bool) {

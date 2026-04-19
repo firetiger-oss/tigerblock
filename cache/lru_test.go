@@ -491,6 +491,140 @@ func TestLRUStatAccounting(t *testing.T) {
 	}
 }
 
+func TestLRULoadCloneKey(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+	var cloneCount int
+	clone := func(k string) string {
+		cloneCount++
+		return k
+	}
+
+	v, err := lru.LoadCloneKey("k", clone, func() (int64, string, error) {
+		return 10, "v", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "v" {
+		t.Errorf("v=%q want v", v)
+	}
+	if cloneCount != 1 {
+		t.Errorf("cloneCount=%d want 1 after miss", cloneCount)
+	}
+
+	v, err = lru.LoadCloneKey("k", clone, func() (int64, string, error) {
+		t.Error("fetch should not run on hit")
+		return 0, "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "v" {
+		t.Errorf("v=%q want v (hit)", v)
+	}
+	if cloneCount != 1 {
+		t.Errorf("cloneCount=%d want 1 after hit", cloneCount)
+	}
+}
+
+func TestLRUGetCloneKeyInflightDedup(t *testing.T) {
+	lru := &LRU[string, string]{Limit: 100}
+
+	const numGoroutines = 5
+	var mu sync.Mutex
+	var callCount int
+	var cloneCount int
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(numGoroutines)
+	done.Add(numGoroutines)
+
+	clone := func(k string) string {
+		mu.Lock()
+		cloneCount++
+		mu.Unlock()
+		return k
+	}
+	fetch := func() (int64, string, error) {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		return 10, "shared", nil
+	}
+
+	for range numGoroutines {
+		go func() {
+			defer done.Done()
+			start.Done()
+			start.Wait()
+			p := lru.GetCloneKey("k", clone, fetch)
+			v, err := p.Wait()
+			if err != nil {
+				t.Errorf("Wait failed: %v", err)
+			}
+			if v != "shared" {
+				t.Errorf("v=%q want shared", v)
+			}
+		}()
+	}
+	done.Wait()
+
+	if callCount != 1 {
+		t.Errorf("fetch ran %d times, want 1 (inflight dedup)", callCount)
+	}
+	if cloneCount != 1 {
+		t.Errorf("clone ran %d times, want 1 (only the winning fetch clones)", cloneCount)
+	}
+}
+
+func TestTTLLoadCloneKey(t *testing.T) {
+	ttl := &TTL[string, string]{Limit: 100}
+	var cloneCount int
+	clone := func(k string) string {
+		cloneCount++
+		return k
+	}
+	expire := time.Now().Add(time.Hour)
+
+	v, _, err := ttl.LoadCloneKey("k", time.Now(), clone, func() (int64, string, time.Time, error) {
+		return 10, "v", expire, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "v" {
+		t.Errorf("v=%q want v", v)
+	}
+	if cloneCount != 1 {
+		t.Errorf("cloneCount=%d want 1", cloneCount)
+	}
+
+	v, _, err = ttl.LoadCloneKey("k", time.Now(), clone, func() (int64, string, time.Time, error) {
+		t.Error("fetch should not run on hit")
+		return 0, "", time.Time{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "v" {
+		t.Errorf("v=%q want v (hit)", v)
+	}
+	if cloneCount != 1 {
+		t.Errorf("cloneCount=%d want 1 after hit", cloneCount)
+	}
+
+	_, _, err = ttl.ReloadCloneKey("k", time.Now(), clone, func() (int64, string, time.Time, error) {
+		return 10, "v2", expire, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloneCount != 2 {
+		t.Errorf("cloneCount=%d want 2 after reload", cloneCount)
+	}
+}
+
 func TestLRUZeroLimit(t *testing.T) {
 	lru := &LRU[string, string]{Limit: 0}
 
