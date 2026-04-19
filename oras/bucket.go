@@ -345,4 +345,3 @@ func makeBucketError(err error) error {
 	}
 	return errors.Join(sentinel, err)
 }
-
