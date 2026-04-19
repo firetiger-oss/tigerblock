@@ -78,38 +78,70 @@ func (c *LRU[K, V]) Get(k K, fetch func() (int64, V, error)) *Promise[V] {
 	return c.GetCloneKey(k, passthrough[K], fetch)
 }
 
-// GetCloneKey behaves like Get but invokes clone(k) to produce the key that
-// is retained in the cache and inflight map on a miss. The caller's k is only
-// used for value-comparison lookups and may be backed by transient memory
-// that is reused after the call returns.
+// GetCloneKey behaves like Get but invokes clone(k) to produce the key
+// that is retained in the cache and inflight map on a miss. The caller's
+// k is only used for value-comparison lookups and may be backed by
+// transient memory that is reused after the call returns. clone must be
+// a pure copy with no observable side effects and must not panic: under
+// contention, a caller that loses the race to install an inflight entry
+// may invoke clone before discarding the result to join the existing
+// fetch.
 func (c *LRU[K, V]) GetCloneKey(k K, clone func(K) K, fetch func() (int64, V, error)) *Promise[V] {
-	c.mutex.Lock()
-	if v, ok := c.cache.Lookup(k); ok {
-		c.mutex.Unlock()
-		return &Promise[V]{ready: ready, value: v}
+	if p := c.lookup(k); p != nil {
+		return p
 	}
-	return c.fetchLocked(k, clone, fetch)
+	stored := clone(k)
+	p, readyCh := c.install(stored)
+	if readyCh == nil {
+		return p
+	}
+	return c.runFetch(stored, p, readyCh, fetch)
 }
 
-// fetchLocked is called with c.mutex held. It releases the lock before
-// returning. If an inflight fetch for k already exists, the existing Promise
-// is returned; otherwise the calling goroutine executes fetch inline. clone
-// is invoked once on a fresh fetch to produce the key stored in the inflight
-// map and in the underlying LRU; because clone is user-supplied and may
-// panic, it is called with the lock released so a panic does not wedge the
-// cache. The inflight map is re-checked after cloning in case another
-// goroutine raced us.
-func (c *LRU[K, V]) fetchLocked(k K, clone func(K) K, fetch func() (int64, V, error)) *Promise[V] {
-	if p := c.inflight[k]; p != nil {
-		c.mutex.Unlock()
-		return p
+func (c *LRU[K, V]) Load(k K, fetch func() (int64, V, error)) (V, error) {
+	return c.Get(k, fetch).Wait()
+}
+
+// LoadCloneKey is the blocking counterpart of GetCloneKey; see that method
+// for the clone contract.
+func (c *LRU[K, V]) LoadCloneKey(k K, clone func(K) K, fetch func() (int64, V, error)) (V, error) {
+	return c.GetCloneKey(k, clone, fetch).Wait()
+}
+
+func (c *LRU[K, V]) Peek(k K) (V, bool) {
+	c.mutex.Lock()
+	v, ok := c.cache.Lookup(k)
+	if !ok {
+		if p := c.inflight[k]; p != nil {
+			c.mutex.Unlock()
+			<-p.ready
+			return p.value, p.error == nil && p.panic == nil
+		}
 	}
 	c.mutex.Unlock()
-	stored := clone(k)
+	return v, ok
+}
+
+// lookup returns a resolved promise for a cache hit, the existing promise
+// for an inflight fetch, or nil if neither is present.
+func (c *LRU[K, V]) lookup(k K) *Promise[V] {
 	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if v, ok := c.cache.Lookup(k); ok {
+		return &Promise[V]{ready: ready, value: v}
+	}
+	return c.inflight[k]
+}
+
+// install installs a new inflight entry for stored. If another goroutine
+// already has one (possibly installed while the caller was cloning), the
+// existing promise is returned and readyCh is nil. Otherwise the returned
+// readyCh is non-nil and the caller must complete the fetch via runFetch.
+func (c *LRU[K, V]) install(stored K) (*Promise[V], chan struct{}) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	if p := c.inflight[stored]; p != nil {
-		c.mutex.Unlock()
-		return p
+		return p, nil
 	}
 	readyCh := make(chan struct{})
 	p := &Promise[V]{ready: readyCh}
@@ -117,8 +149,13 @@ func (c *LRU[K, V]) fetchLocked(k K, clone func(K) K, fetch func() (int64, V, er
 		c.inflight = make(map[K]*Promise[V])
 	}
 	c.inflight[stored] = p
-	c.mutex.Unlock()
+	return p, readyCh
+}
 
+// runFetch executes fetch inline, inserts the value into the cache on
+// success, and fulfills the promise regardless of outcome. Must only be
+// called by the goroutine that owns the inflight entry for stored.
+func (c *LRU[K, V]) runFetch(stored K, p *Promise[V], readyCh chan struct{}, fetch func() (int64, V, error)) *Promise[V] {
 	var (
 		size int64
 		v    V
@@ -147,26 +184,4 @@ func (c *LRU[K, V]) fetchLocked(k K, clone func(K) K, fetch func() (int64, V, er
 	}()
 	size, v, err = fetch()
 	return p
-}
-
-func (c *LRU[K, V]) Load(k K, fetch func() (int64, V, error)) (V, error) {
-	return c.Get(k, fetch).Wait()
-}
-
-func (c *LRU[K, V]) LoadCloneKey(k K, clone func(K) K, fetch func() (int64, V, error)) (V, error) {
-	return c.GetCloneKey(k, clone, fetch).Wait()
-}
-
-func (c *LRU[K, V]) Peek(k K) (V, bool) {
-	c.mutex.Lock()
-	v, ok := c.cache.Lookup(k)
-	if !ok {
-		if p := c.inflight[k]; p != nil {
-			c.mutex.Unlock()
-			<-p.ready
-			return p.value, p.error == nil && p.panic == nil
-		}
-	}
-	c.mutex.Unlock()
-	return v, ok
 }

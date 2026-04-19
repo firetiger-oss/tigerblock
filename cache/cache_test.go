@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -217,6 +218,53 @@ func TestCachePanicPropagatesAndClearsInflight(t *testing.T) {
 	}
 	if v != "after" {
 		t.Errorf("v=%q want after", v)
+	}
+}
+
+func TestCacheLoadCloneKeyJoinsInflightWithoutCloning(t *testing.T) {
+	c := cache.New[string, string](10)
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+
+	loadDone := make(chan struct{})
+	go func() {
+		defer close(loadDone)
+		c.LoadCloneKey("k", passthroughString, func() (string, error) {
+			close(fetchStarted)
+			<-releaseFetch
+			return "v", nil
+		})
+	}()
+	<-fetchStarted
+
+	var cloneCount int32
+	joinDone := make(chan struct{})
+	go func() {
+		defer close(joinDone)
+		v, err := c.LoadCloneKey("k", func(s string) string {
+			atomic.AddInt32(&cloneCount, 1)
+			return s
+		}, func() (string, error) {
+			t.Error("load should not run when joining an existing inflight fetch")
+			return "", nil
+		})
+		if err != nil {
+			t.Errorf("err=%v", err)
+		}
+		if v != "v" {
+			t.Errorf("v=%q want v", v)
+		}
+	}()
+
+	// Give the second caller time to reach the inflight check.
+	time.Sleep(50 * time.Millisecond)
+	close(releaseFetch)
+	<-loadDone
+	<-joinDone
+
+	if got := atomic.LoadInt32(&cloneCount); got != 0 {
+		t.Errorf("clone ran %d times while joining inflight, want 0", got)
 	}
 }
 

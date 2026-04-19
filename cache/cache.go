@@ -30,53 +30,67 @@ func (c *Cache[K, V]) Load(key K, load func() (V, error)) (V, error) {
 	return c.LoadCloneKey(key, passthrough[K], load)
 }
 
+// LoadCloneKey behaves like Load but invokes clone(key) on a miss to
+// produce the key retained in the cache, so callers can pass transient
+// keys (e.g. strings backed by a reused buffer) without the cache
+// retaining that backing memory. clone must be a pure copy with no
+// observable side effects and must not panic: under contention, a caller
+// that loses the race to install an inflight entry may invoke clone
+// before discarding the result to join the existing fetch.
 func (c *Cache[K, V]) LoadCloneKey(key K, clone func(K) K, load func() (V, error)) (V, error) {
-	c.mutex.RLock()
-	value, ok := c.state[key]
-	c.mutex.RUnlock()
-	if ok {
-		return value, nil
+	v, hit, p := c.peek(key)
+	if hit {
+		return v, nil
 	}
-	c.mutex.Lock()
-	if value, ok := c.state[key]; ok {
-		c.mutex.Unlock()
-		return value, nil
-	}
-	if p := c.inflight[key]; p != nil {
-		c.mutex.Unlock()
+	if p != nil {
 		return p.Wait()
 	}
-	return c.fetchLocked(key, clone, load).Wait()
+	stored := clone(key)
+	p, readyCh := c.claim(stored)
+	if readyCh == nil {
+		return p.Wait()
+	}
+	c.runLoad(stored, p, readyCh, load)
+	return p.Wait()
 }
 
-// fetchLocked is called with c.mutex held for writing, after the caller has
-// confirmed that neither c.state nor c.inflight currently has an entry for
-// key. The lock is released before returning. clone is user-supplied code
-// that may panic, so it is invoked with the lock released to avoid leaking
-// the mutex in that case; the state and inflight maps are re-checked after
-// cloning in case another goroutine raced us.
-func (c *Cache[K, V]) fetchLocked(key K, clone func(K) K, load func() (V, error)) *Promise[V] {
-	c.mutex.Unlock()
-	stored := clone(key)
+// peek checks state and inflight under a read lock. hit is true iff the
+// value is currently in state; otherwise p is either a pending inflight
+// promise or nil when the caller must clone and install one.
+func (c *Cache[K, V]) peek(key K) (value V, hit bool, p *Promise[V]) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	if v, ok := c.state[key]; ok {
+		return v, true, nil
+	}
+	return value, false, c.inflight[key]
+}
+
+// claim atomically checks state and inflight for key. If either holds a
+// result, the returned readyCh is nil and the caller should simply Wait on
+// the promise. Otherwise the caller owns a freshly installed inflight entry
+// and must complete it via runLoad.
+func (c *Cache[K, V]) claim(key K) (*Promise[V], chan struct{}) {
 	c.mutex.Lock()
-
-	if value, ok := c.state[stored]; ok {
-		c.mutex.Unlock()
-		return &Promise[V]{ready: ready, value: value}
+	defer c.mutex.Unlock()
+	if v, ok := c.state[key]; ok {
+		return &Promise[V]{ready: ready, value: v}, nil
 	}
-	if p := c.inflight[stored]; p != nil {
-		c.mutex.Unlock()
-		return p
+	if p := c.inflight[key]; p != nil {
+		return p, nil
 	}
-
 	readyCh := make(chan struct{})
 	p := &Promise[V]{ready: readyCh}
 	if c.inflight == nil {
 		c.inflight = make(map[K]*Promise[V])
 	}
-	c.inflight[stored] = p
-	c.mutex.Unlock()
+	c.inflight[key] = p
+	return p, readyCh
+}
 
+// runLoad executes load and fulfills the promise installed for stored. Must
+// only be called by the goroutine that owns the inflight entry.
+func (c *Cache[K, V]) runLoad(stored K, p *Promise[V], readyCh chan struct{}, load func() (V, error)) {
 	var (
 		v   V
 		err error
@@ -105,7 +119,6 @@ func (c *Cache[K, V]) fetchLocked(key K, clone func(K) K, load func() (V, error)
 		}
 	}()
 	v, err = load()
-	return p
 }
 
 type SeqCache[K comparable, V any] struct{ cache Cache[K, []V] }
@@ -120,6 +133,8 @@ func (s *SeqCache[K, V]) Load(key K, load iter.Seq2[V, error]) iter.Seq2[V, erro
 	return s.LoadCloneKey(key, passthrough[K], load)
 }
 
+// LoadCloneKey behaves like Load but invokes clone(key) to produce the
+// key retained in the cache. See Cache.LoadCloneKey for the clone contract.
 func (s *SeqCache[K, V]) LoadCloneKey(key K, clone func(K) K, load iter.Seq2[V, error]) iter.Seq2[V, error] {
 	return func(yield func(V, error) bool) {
 		values, err := s.cache.LoadCloneKey(key, clone, func() ([]V, error) {

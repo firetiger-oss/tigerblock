@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -573,8 +574,11 @@ func TestLRUGetCloneKeyInflightDedup(t *testing.T) {
 	if callCount != 1 {
 		t.Errorf("fetch ran %d times, want 1 (inflight dedup)", callCount)
 	}
-	if cloneCount != 1 {
-		t.Errorf("clone ran %d times, want 1 (only the winning fetch clones)", cloneCount)
+	// clone may run more than once under contention: goroutines that all
+	// miss the initial lookup each clone their own key before racing at
+	// install. Only one wins the install; the loser discards its clone.
+	if cloneCount < 1 || cloneCount > numGoroutines {
+		t.Errorf("clone ran %d times, want in [1, %d]", cloneCount, numGoroutines)
 	}
 }
 
@@ -695,6 +699,53 @@ func TestTTLLoadCloneKeyPanicInCloneReleasesLock(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second Load deadlocked — panic in clone did not release the lock")
+	}
+}
+
+func TestTTLReloadCloneKeyJoinsInflightWithoutCloning(t *testing.T) {
+	ttl := &TTL[string, string]{Limit: 100}
+	now := time.Now()
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+
+	loadDone := make(chan struct{})
+	go func() {
+		defer close(loadDone)
+		ttl.ReloadCloneKey("k", now, passthrough[string], func() (int64, string, time.Time, error) {
+			close(fetchStarted)
+			<-releaseFetch
+			return 10, "v", now.Add(time.Hour), nil
+		})
+	}()
+	<-fetchStarted
+
+	var cloneCount int32
+	joinDone := make(chan struct{})
+	go func() {
+		defer close(joinDone)
+		v, _, err := ttl.ReloadCloneKey("k", now, func(s string) string {
+			atomic.AddInt32(&cloneCount, 1)
+			return s
+		}, func() (int64, string, time.Time, error) {
+			t.Error("fetch should not run when joining an existing inflight")
+			return 0, "", time.Time{}, nil
+		})
+		if err != nil {
+			t.Errorf("err=%v", err)
+		}
+		if v != "v" {
+			t.Errorf("v=%q want v", v)
+		}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	close(releaseFetch)
+	<-loadDone
+	<-joinDone
+
+	if got := atomic.LoadInt32(&cloneCount); got != 0 {
+		t.Errorf("clone ran %d times while joining inflight, want 0", got)
 	}
 }
 
