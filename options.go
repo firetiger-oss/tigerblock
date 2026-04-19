@@ -83,25 +83,34 @@ func (put *PutOptions) ContentLength(r io.Reader) (int64, error) {
 		return int64(r.Len()), nil
 
 	case *os.File:
-		if fi, err := r.Stat(); err != nil {
+		// Number of bytes remaining from the file's current cursor, not
+		// the absolute file size: callers may pass a file that has
+		// already been advanced (e.g. after peeking at a header).
+		fi, err := r.Stat()
+		if err != nil {
 			return 0, err
-		} else {
-			return fi.Size(), nil
 		}
-
-	case io.Seeker:
 		offset, err := r.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return 0, err
 		}
-		contentLength, err := r.Seek(0, io.SeekEnd)
+		return fi.Size() - offset, nil
+
+	case io.Seeker:
+		// Bytes remaining from the current position, not the absolute
+		// end offset.
+		offset, err := r.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		end, err := r.Seek(0, io.SeekEnd)
 		if err != nil {
 			return 0, err
 		}
 		if _, err = r.Seek(offset, io.SeekStart); err != nil {
 			return 0, err
 		}
-		return contentLength, nil
+		return end - offset, nil
 
 	default:
 		return -1, nil
