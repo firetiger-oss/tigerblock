@@ -18,6 +18,39 @@ func TestMemoryStorage(t *testing.T) {
 	})
 }
 
+func TestPutObjectRejectsContentLengthMismatch(t *testing.T) {
+	bucket := new(memory.Bucket)
+	ctx := t.Context()
+
+	body := strings.NewReader("twelve bytes")
+	_, err := bucket.PutObject(ctx, "x", body, storage.ContentLength(999))
+	if err == nil {
+		t.Fatal("expected error from content length mismatch")
+	}
+	if !strings.Contains(err.Error(), "content length") {
+		t.Fatalf("error = %v; want one mentioning content length", err)
+	}
+
+	// The object must not have been stored.
+	if _, err := bucket.HeadObject(ctx, "x"); err == nil {
+		t.Fatal("object stored despite content length mismatch")
+	}
+}
+
+func TestPutObjectAcceptsMatchingContentLength(t *testing.T) {
+	bucket := new(memory.Bucket)
+	ctx := t.Context()
+
+	body := strings.NewReader("twelve bytes")
+	info, err := bucket.PutObject(ctx, "x", body, storage.ContentLength(int64(len("twelve bytes"))))
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if info.Size != int64(len("twelve bytes")) {
+		t.Fatalf("Size = %d; want %d", info.Size, len("twelve bytes"))
+	}
+}
+
 func TestWatchDelimiterNotifiesOnNestedWrite(t *testing.T) {
 	// Regression test: a WatchObjects call with a delimiter must still be
 	// notified when a key is written that is deeper than the delimiter.

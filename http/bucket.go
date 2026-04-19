@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -294,6 +295,9 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	setHeaderIfNotEmpty(req.Header, "If-Match", putOptions.IfMatch())
 	setHeaderIfNotEmpty(req.Header, "If-None-Match", putOptions.IfNoneMatch())
 	setObjectMetadata(req.Header, putOptions.Metadata())
+	if sum, ok := putOptions.ChecksumSHA256(); ok {
+		req.Header.Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(sum[:]))
+	}
 
 	res, err := b.client.Do(req)
 	if err != nil {
@@ -599,7 +603,12 @@ func makeIcebergError(req *http.Request, res *http.Response, err error) error {
 	}
 	switch res.StatusCode {
 	case http.StatusBadRequest:
+		// Distinguish BadDigest (checksum mismatch) from generic
+		// validation errors by parsing the S3-style XML body.
 		err = storage.ErrInvalidObjectTag
+		if s3err, e := ReadS3Error(res.Body); e == nil && s3err.Code == "BadDigest" {
+			err = storage.ErrChecksumMismatch
+		}
 	case http.StatusNotFound:
 		err = storage.ErrObjectNotFound
 	case http.StatusPreconditionFailed:

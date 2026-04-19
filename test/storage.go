@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"iter"
@@ -355,6 +356,21 @@ func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, erro
 				}
 				return false, ""
 			},
+		},
+
+		{
+			scenario: "PutObject with matching SHA-256 checksum succeeds and stores the body",
+			function: testStoragePutObjectChecksumSHA256Match,
+		},
+
+		{
+			scenario: "PutObject with mismatched SHA-256 checksum returns ErrChecksumMismatch and does not store the body",
+			function: testStoragePutObjectChecksumSHA256Mismatch,
+		},
+
+		{
+			scenario: "PutObject without a checksum option behaves as before",
+			function: testStoragePutObjectChecksumSHA256NoOption,
 		},
 	}
 
@@ -821,6 +837,69 @@ func testStoragePutObjectIfNoneMatchInvalidEtag(t *testing.T, bucket storage.Buc
 
 	if _, err := bucket.PutObject(ctx, key, strings.NewReader(data), storage.IfNoneMatch("invalid")); !errors.Is(err, storage.ErrInvalidObjectTag) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256Match(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-match"
+	data := []byte("hello, checksum!")
+	sum := sha256.Sum256(data)
+
+	info, err := bucket.PutObject(ctx, key, bytes.NewReader(data), storage.ChecksumSHA256(sum))
+	if err != nil {
+		t.Fatalf("PutObject with matching checksum: %v", err)
+	}
+	if info.Size != int64(len(data)) {
+		t.Fatalf("ObjectInfo.Size = %d; want %d", info.Size, len(data))
+	}
+
+	rc, _, err := bucket.GetObject(ctx, key)
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("body mismatch: got %q want %q", got, data)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256Mismatch(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-mismatch"
+	data := []byte("hello, checksum!")
+	wrong := sha256.Sum256([]byte("decoy"))
+
+	_, err := bucket.PutObject(ctx, key, bytes.NewReader(data), storage.ChecksumSHA256(wrong))
+	if err == nil {
+		t.Fatal("expected error from checksum mismatch")
+	}
+	if !errors.Is(err, storage.ErrChecksumMismatch) {
+		t.Fatalf("err = %v; want errors.Is(err, storage.ErrChecksumMismatch)", err)
+	}
+
+	if _, err := bucket.HeadObject(ctx, key); err == nil {
+		t.Fatal("object stored despite checksum mismatch")
+	} else if !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("HeadObject after mismatch: got %v; want ErrObjectNotFound", err)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256NoOption(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-noopt"
+	data := []byte("plain, no checksum")
+
+	info, err := bucket.PutObject(ctx, key, bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("PutObject without checksum: %v", err)
+	}
+	if info.Size != int64(len(data)) {
+		t.Fatalf("ObjectInfo.Size = %d; want %d", info.Size, len(data))
 	}
 }
 

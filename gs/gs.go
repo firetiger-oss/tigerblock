@@ -2,8 +2,10 @@ package gs
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"iter"
 	"net/http"
@@ -215,16 +217,62 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 		return storage.ObjectInfo{}, err
 	}
 
+	// GCS does not natively expose caller-supplied SHA-256 verification
+	// (it carries CRC32C/MD5 instead). Fall back to wrapping the body with
+	// a reader that hashes on the fly and substitutes ErrChecksumMismatch
+	// for io.EOF on the final Read when the running hash doesn't match.
+	// The upload library sees a non-EOF error and aborts the request, so
+	// nothing is ever committed — no post-hoc DeleteObject required.
+	var verifier *sha256VerifyReader
+	if sum, ok := putOptions.ChecksumSHA256(); ok {
+		verifier = &sha256VerifyReader{r: value, want: sum, hasher: sha256.New()}
+		value = verifier
+	}
+
 	var object storage.ObjectInfo
 	if valueContentLength < 0 {
 		object, err = b.putClient.PutObjectStreaming(ctx, key, value, putOptions)
 	} else {
 		object, err = b.putClient.PutObjectSingleRequest(ctx, key, value, valueContentLength, putOptions)
 	}
+	// If the verifier saw a mismatch, surface it as ErrChecksumMismatch
+	// regardless of how the upload library reported the aborted request
+	// (resumable-upload error messages get repackaged on the way back).
+	if verifier != nil && verifier.mismatched {
+		return storage.ObjectInfo{}, fmt.Errorf("%s: %w", key, storage.ErrChecksumMismatch)
+	}
 	if err != nil {
 		return storage.ObjectInfo{}, makeIcebergError(err)
 	}
 	return object, nil
+}
+
+// sha256VerifyReader hashes the bytes flowing through it and replaces
+// io.EOF on the final Read with [storage.ErrChecksumMismatch] when the
+// running hash doesn't match the expected sum. Setting `mismatched`
+// lets the caller identify the failure even when the upload library
+// repackages the underlying error.
+type sha256VerifyReader struct {
+	r          io.Reader
+	want       [sha256.Size]byte
+	hasher     hash.Hash
+	mismatched bool
+}
+
+func (v *sha256VerifyReader) Read(p []byte) (int, error) {
+	n, err := v.r.Read(p)
+	if n > 0 {
+		v.hasher.Write(p[:n])
+	}
+	if err == io.EOF {
+		var got [sha256.Size]byte
+		copy(got[:], v.hasher.Sum(nil))
+		if got != v.want {
+			v.mismatched = true
+			return n, fmt.Errorf("%w", storage.ErrChecksumMismatch)
+		}
+	}
+	return n, err
 }
 
 func (b *Bucket) DeleteObject(ctx context.Context, key string) error {

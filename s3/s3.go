@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -810,6 +811,11 @@ func newPutObjectInput(bucket, key string, options ...storage.PutOption) *s3.Put
 		input.IfNoneMatch = aws.String("*")
 	}
 
+	if sum, ok := putOptions.ChecksumSHA256(); ok {
+		input.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
+		input.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(sum[:]))
+	}
+
 	return input
 }
 
@@ -855,6 +861,14 @@ func makeIcebergError(err error) error {
 			return errors.Join(storage.ErrObjectNotMatch, err)
 		case "TooManyRequestsException", "SlowDown", "503 SlowDown":
 			return errors.Join(storage.ErrTooManyRequests, err)
+		case "BadDigest":
+			// Returned when a precomputed x-amz-checksum-* value
+			// (or Content-MD5) does not match what S3 calculated
+			// from the body. XAmzContentSHA256Mismatch is
+			// intentionally not mapped here — that's a SigV4
+			// request-signing failure, not a body-integrity check.
+			// See https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+			return errors.Join(storage.ErrChecksumMismatch, err)
 		}
 	}
 	return err

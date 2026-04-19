@@ -36,6 +36,7 @@ var (
 	ErrBucketExist         = errors.New("bucket exist")
 	ErrBucketNotFound      = errors.New("bucket not found")
 	ErrBucketReadOnly      = errors.New("read-only bucket")
+	ErrChecksumMismatch    = makeExpected(errors.New("checksum mismatch"))
 	ErrObjectNotFound      = makeExpected(errors.New("object not found"))
 	ErrObjectNotMatch      = makeTemporary(errors.New("object mismatch"))
 	ErrInvalidObjectKey    = errors.New("invalid object key")

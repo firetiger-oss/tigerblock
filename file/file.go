@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"iter"
@@ -227,6 +229,10 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	}
 
 	putOptions := storage.NewPutOptions(options...)
+	contentLength, err := putOptions.ContentLength(value)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
 	ifMatch := putOptions.IfMatch()
 	ifNoneMatch := putOptions.IfNoneMatch()
 	switch ifNoneMatch {
@@ -248,8 +254,27 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	}()
 
 	etag := md5.New()
-	if _, err := io.Copy(io.MultiWriter(temp, etag), value); err != nil {
+	wantSHA, verifySHA := putOptions.ChecksumSHA256()
+	var sha hash.Hash
+	writers := []io.Writer{temp, etag}
+	if verifySHA {
+		sha = sha256.New()
+		writers = append(writers, sha)
+	}
+	written, err := io.Copy(io.MultiWriter(writers...), value)
+	if err != nil {
 		return storage.ObjectInfo{}, err
+	}
+	if contentLength >= 0 && written != contentLength {
+		return storage.ObjectInfo{}, fmt.Errorf("%s: declared content length %d does not match streamed body of %d bytes",
+			key, contentLength, written)
+	}
+	if verifySHA {
+		var got [sha256.Size]byte
+		copy(got[:], sha.Sum(nil))
+		if got != wantSHA {
+			return storage.ObjectInfo{}, fmt.Errorf("%s: %w", key, storage.ErrChecksumMismatch)
+		}
 	}
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
 		return storage.ObjectInfo{}, err
