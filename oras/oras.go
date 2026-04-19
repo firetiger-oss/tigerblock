@@ -115,6 +115,13 @@ func (s *store) Push(ctx context.Context, expected ocispec.Descriptor, content i
 		storage.ContentLength(expected.Size),
 		storage.ContentType(cmp.Or(expected.MediaType, "application/octet-stream")),
 		storage.ChecksumSHA256(sum),
+		// Blobs are content-addressable: their bytes never change at
+		// this key, so they're safe to cache permanently. Other
+		// descriptor-level properties (Annotations, URLs, ArtifactType,
+		// Platform) are intentionally NOT mirrored onto the blob —
+		// the OCI spec scopes them to the descriptor, and we already
+		// preserve the full descriptor JSON in refs/<reference>.
+		storage.CacheControl(storage.CacheControlImmutable),
 	); err != nil {
 		return fmt.Errorf("%s: %w", expected.Digest, makeError(err))
 	}

@@ -55,6 +55,42 @@ func TestPushFetchRoundTrip(t *testing.T) {
 	}
 }
 
+// Blobs are content-addressable and therefore immutable; the bridge
+// must mark them as such so CDNs and HTTP caches treat them as
+// permanent. Tag refs are deliberately left without a cache directive
+// because they're mutable.
+func TestPushSetsImmutableCacheControlOnBlobs(t *testing.T) {
+	ctx := t.Context()
+	bucket := memory.NewBucket()
+	target := storageoras.New(bucket)
+
+	body := []byte("immutable")
+	desc := descriptorFor(body, "application/octet-stream")
+	if err := target.Push(ctx, desc, bytes.NewReader(body)); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	blobKey := "blobs/" + desc.Digest.Algorithm().String() + "/" + desc.Digest.Encoded()
+	info, err := bucket.HeadObject(ctx, blobKey)
+	if err != nil {
+		t.Fatalf("HeadObject(blob): %v", err)
+	}
+	if info.CacheControl != storage.CacheControlImmutable {
+		t.Fatalf("blob CacheControl = %q; want %q", info.CacheControl, storage.CacheControlImmutable)
+	}
+
+	if err := target.Tag(ctx, desc, "v1"); err != nil {
+		t.Fatalf("Tag: %v", err)
+	}
+	refInfo, err := bucket.HeadObject(ctx, "refs/v1")
+	if err != nil {
+		t.Fatalf("HeadObject(ref): %v", err)
+	}
+	if refInfo.CacheControl != "" {
+		t.Fatalf("ref CacheControl = %q; want empty (refs are mutable)", refInfo.CacheControl)
+	}
+}
+
 func TestExistsReportsPresence(t *testing.T) {
 	ctx := t.Context()
 	target := storageoras.New(memory.NewBucket())
