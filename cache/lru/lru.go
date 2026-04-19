@@ -35,6 +35,16 @@ func (c *LRU[K, V]) Lookup(k K) (v V, ok bool) {
 	return v, false
 }
 
+// Peek returns the value for k if present without promoting it to most
+// recently used and without updating Hits / Misses.
+func (c *LRU[K, V]) Peek(k K) (v V, ok bool) {
+	elem, ok := c.cache[k]
+	if ok {
+		return elem.item.value, true
+	}
+	return v, false
+}
+
 func (c *LRU[K, V]) Insert(k K, v V, size int64) bool {
 	if c.cache == nil {
 		c.cache = make(map[K]*element[item[K, V]])
