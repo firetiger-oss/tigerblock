@@ -74,6 +74,8 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/hanwen/go-fuse/v2 v2.9.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
+	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
@@ -95,6 +97,7 @@ require (
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251022142026-3a174f9686a8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
+	oras.land/oras-go/v2 v2.6.0 // indirect
 )
 
 tool golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize

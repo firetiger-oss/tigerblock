@@ -3,6 +3,8 @@ package fakes3
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -135,11 +137,26 @@ func (c *Client) PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	for key, value := range params.Metadata {
 		options = append(options, storage.Metadata(key, value))
 	}
+	if params.ChecksumSHA256 != nil {
+		raw, err := base64.StdEncoding.DecodeString(aws.ToString(params.ChecksumSHA256))
+		if err != nil || len(raw) != sha256.Size {
+			return nil, &smithy.GenericAPIError{Code: "InvalidDigest"}
+		}
+		var sum [sha256.Size]byte
+		copy(sum[:], raw)
+		options = append(options, storage.ChecksumSHA256(sum))
+	}
+	if params.ContentLength != nil {
+		options = append(options, storage.ContentLength(aws.ToInt64(params.ContentLength)))
+	}
 
 	object, err := c.Bucket.PutObject(ctx, aws.ToString(params.Key), params.Body, options...)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotMatch) {
 			return nil, &smithy.GenericAPIError{Code: "PreconditionFailed"}
+		}
+		if errors.Is(err, storage.ErrChecksumMismatch) {
+			return nil, &smithy.GenericAPIError{Code: "BadDigest"}
 		}
 		return nil, err
 	}

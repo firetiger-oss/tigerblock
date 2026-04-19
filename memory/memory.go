@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -206,17 +207,31 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 		return storage.ObjectInfo{}, err
 	}
 
+	putOptions := storage.NewPutOptions(options...)
+	contentLength, err := putOptions.ContentLength(value)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+
 	buffer := new(bytes.Buffer)
-	_, err := buffer.ReadFrom(value)
+	_, err = buffer.ReadFrom(value)
 	if err != nil {
 		return storage.ObjectInfo{}, err
 	}
 
 	lastModified := time.Now()
 	data := buffer.Bytes()
+	if contentLength >= 0 && int64(len(data)) != contentLength {
+		return storage.ObjectInfo{}, fmt.Errorf("%s: declared content length %d does not match streamed body of %d bytes",
+			key, contentLength, len(data))
+	}
+	if want, ok := putOptions.ChecksumSHA256(); ok {
+		if got := sha256.Sum256(data); got != want {
+			return storage.ObjectInfo{}, fmt.Errorf("%s: %w", key, storage.ErrChecksumMismatch)
+		}
+	}
 	etag := hashObject(data)
 
-	putOptions := storage.NewPutOptions(options...)
 	cacheControl := putOptions.CacheControl()
 	contentType := putOptions.ContentType()
 	contentEncoding := putOptions.ContentEncoding()

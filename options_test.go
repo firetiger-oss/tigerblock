@@ -3,6 +3,8 @@ package storage_test
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -227,6 +229,19 @@ func TestPutOptionsContentLength(t *testing.T) {
 			},
 			want: -1,
 		},
+
+		{
+			// Regression: the io.Seeker fallback used to return the
+			// absolute end offset instead of bytes remaining from
+			// the current cursor.
+			scenario: "io.Seeker advanced past header reports remaining bytes",
+			reader: func() io.Reader {
+				r := newSeeker([]byte("HEADERPAYLOAD"))
+				r.advance(6)
+				return r
+			},
+			want: 7,
+		},
 	}
 
 	for _, test := range tests {
@@ -258,6 +273,47 @@ type contentLengthAndLenReader struct {
 func (r *contentLengthAndLenReader) Read(p []byte) (int, error) { return 0, io.EOF }
 func (r *contentLengthAndLenReader) ContentLength() int64       { return r.contentLength }
 func (r *contentLengthAndLenReader) Len() int                   { return r.len }
+
+// seekerOnly wraps bytes.Reader to expose only Read+Seek (not Len),
+// forcing PutOptions.ContentLength to fall through to the io.Seeker
+// branch instead of using the Len() shortcut.
+type seekerOnly struct{ r *bytes.Reader }
+
+func newSeeker(b []byte) *seekerOnly                     { return &seekerOnly{r: bytes.NewReader(b)} }
+func (s *seekerOnly) Read(p []byte) (int, error)         { return s.r.Read(p) }
+func (s *seekerOnly) Seek(o int64, w int) (int64, error) { return s.r.Seek(o, w) }
+func (s *seekerOnly) advance(n int64)                    { _, _ = s.r.Seek(n, io.SeekStart) }
+
+// Regression: *os.File previously reported the absolute file size from
+// Stat(), ignoring the cursor position. Callers that pass an
+// already-advanced file (e.g. after sniffing a header) were getting a
+// wrong content length, which now causes false-mismatch rejections in
+// the memory and file backends.
+func TestPutOptionsContentLengthFileAdvancedCursor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blob")
+	if err := os.WriteFile(path, []byte("HEADERPAYLOAD"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(6, io.SeekStart); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+
+	options := storage.NewPutOptions()
+	got, err := options.ContentLength(f)
+	if err != nil {
+		t.Fatalf("ContentLength: %v", err)
+	}
+	if got != 7 {
+		t.Errorf("ContentLength = %d; want 7 (remaining bytes after advancing 6 of 13)", got)
+	}
+}
 
 func TestListOptions(t *testing.T) {
 	tests := []struct {

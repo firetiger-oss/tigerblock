@@ -1,6 +1,8 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -366,6 +368,24 @@ func handlePUT(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 	options = appendIfNotEmpty(options, r.Header, "Content-Encoding", storage.ContentEncoding)
 	options = appendIfNotEmpty(options, r.Header, "If-Match", storage.IfMatch)
 	options = appendIfNotEmpty(options, r.Header, "If-None-Match", storage.IfNoneMatch)
+	if r.ContentLength >= 0 {
+		// Plumb the wire-declared length through to the backend so it
+		// can validate (same pattern as the other header forwards
+		// above). The HTTP layer itself doesn't reimplement the
+		// check — the backend does.
+		options = append(options, storage.ContentLength(r.ContentLength))
+	}
+
+	if encoded := r.Header.Get("x-amz-checksum-sha256"); encoded != "" {
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(raw) != sha256.Size {
+			Error(w, "BadDigest", "The X-Amz-Checksum-Sha256 header is not a valid base64-encoded SHA-256.", encoded, http.StatusBadRequest)
+			return
+		}
+		var sum [sha256.Size]byte
+		copy(sum[:], raw)
+		options = append(options, storage.ChecksumSHA256(sum))
+	}
 
 	for key, values := range r.Header {
 		if len(values) > 0 && strings.HasPrefix(key, "X-Amz-Meta-") {
@@ -636,6 +656,8 @@ func mapErrorToS3(err error) (string, int) {
 		return "NoSuchKey", http.StatusNotFound
 	case errors.Is(err, storage.ErrObjectNotMatch):
 		return "PreconditionFailed", http.StatusPreconditionFailed
+	case errors.Is(err, storage.ErrChecksumMismatch):
+		return "BadDigest", http.StatusBadRequest
 	case errors.Is(err, storage.ErrBucketExist):
 		return "BucketAlreadyExists", http.StatusConflict
 	case errors.Is(err, storage.ErrBucketNotFound):

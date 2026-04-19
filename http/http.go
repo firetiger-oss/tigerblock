@@ -354,6 +354,26 @@ type S3Error struct {
 	RequestID string   `xml:"RequestId,omitempty"`
 }
 
+// maxS3ErrorBytes bounds how much of an error response body we will
+// look at before giving up on XML decoding. S3-style error documents
+// are tiny in practice (<1 KiB); 8 KiB leaves ample headroom for
+// implementations that pad the response while still preventing a
+// runaway server from consuming unbounded memory.
+const maxS3ErrorBytes = 8 << 10
+
+// ReadS3Error decodes an S3-style XML error document from r without
+// buffering the whole response in memory. The reader is wrapped in an
+// [io.LimitReader] so a misbehaving server cannot force unbounded reads.
+// It returns the parsed error or a decode error if the body is not
+// well-formed S3 XML.
+func ReadS3Error(r io.Reader) (*S3Error, error) {
+	var s3err S3Error
+	if err := xml.NewDecoder(io.LimitReader(r, maxS3ErrorBytes)).Decode(&s3err); err != nil {
+		return nil, err
+	}
+	return &s3err, nil
+}
+
 type CopyObjectResult struct {
 	XMLName      xml.Name `xml:"CopyObjectResult"`
 	ETag         string   `xml:"ETag"`

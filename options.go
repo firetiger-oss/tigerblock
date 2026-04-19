@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"crypto/sha256"
 	"io"
 	"iter"
 	"os"
@@ -35,6 +36,7 @@ type PutOption func(*PutOptions)
 
 type PutOptions struct {
 	cacheControl    string
+	checksumSHA256  [sha256.Size]byte
 	contentEncoding string
 	contentLength   *int64
 	contentType     string
@@ -48,6 +50,14 @@ func NewPutOptions(options ...PutOption) *PutOptions {
 }
 
 func (put *PutOptions) CacheControl() string { return put.cacheControl }
+
+// ChecksumSHA256 returns the configured SHA-256 the body must hash to,
+// and a bool indicating whether one was set. The all-zero value is the
+// "unset" sentinel — collision with a real SHA-256 is 1 in 2^256.
+func (put *PutOptions) ChecksumSHA256() ([sha256.Size]byte, bool) {
+	var zero [sha256.Size]byte
+	return put.checksumSHA256, put.checksumSHA256 != zero
+}
 
 // ContentLength returns the configured value, else tries to figure out the content length of the io.Reader.
 // If it cannot figure out the length, then returns -1.
@@ -73,25 +83,34 @@ func (put *PutOptions) ContentLength(r io.Reader) (int64, error) {
 		return int64(r.Len()), nil
 
 	case *os.File:
-		if fi, err := r.Stat(); err != nil {
+		// Number of bytes remaining from the file's current cursor, not
+		// the absolute file size: callers may pass a file that has
+		// already been advanced (e.g. after peeking at a header).
+		fi, err := r.Stat()
+		if err != nil {
 			return 0, err
-		} else {
-			return fi.Size(), nil
 		}
-
-	case io.Seeker:
 		offset, err := r.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return 0, err
 		}
-		contentLength, err := r.Seek(0, io.SeekEnd)
+		return fi.Size() - offset, nil
+
+	case io.Seeker:
+		// Bytes remaining from the current position, not the absolute
+		// end offset.
+		offset, err := r.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		end, err := r.Seek(0, io.SeekEnd)
 		if err != nil {
 			return 0, err
 		}
 		if _, err = r.Seek(offset, io.SeekStart); err != nil {
 			return 0, err
 		}
-		return contentLength, nil
+		return end - offset, nil
 
 	default:
 		return -1, nil
@@ -115,6 +134,15 @@ func (put *PutOptions) Metadata() map[string]string { return put.metadata }
 
 func CacheControl(cc string) PutOption {
 	return func(put *PutOptions) { put.cacheControl = cc }
+}
+
+// ChecksumSHA256 declares the SHA-256 the body must hash to. Backends
+// either let their object store verify natively (S3, S3-compatible HTTP)
+// or stream-verify on the client (memory, GCS, file). On mismatch they
+// return an error wrapping [ErrChecksumMismatch] and do not durably
+// store the body.
+func ChecksumSHA256(sum [sha256.Size]byte) PutOption {
+	return func(put *PutOptions) { put.checksumSHA256 = sum }
 }
 
 func ContentLength(length int64) PutOption {

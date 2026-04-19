@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"iter"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/gs"
+	storagehttp "github.com/firetiger-oss/storage/http"
 	"github.com/firetiger-oss/storage/internal/sequtil"
 	"github.com/firetiger-oss/storage/uri"
 )
@@ -352,6 +354,47 @@ func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, erro
 			skipIf: func(bucket storage.Bucket) (bool, string) {
 				if _, ok := bucket.(*gs.Bucket); ok {
 					return true, "GCS mock client does not support context cancellation"
+				}
+				return false, ""
+			},
+		},
+
+		{
+			scenario: "PutObject with matching SHA-256 checksum succeeds and stores the body",
+			function: testStoragePutObjectChecksumSHA256Match,
+		},
+
+		{
+			scenario: "PutObject with mismatched SHA-256 checksum returns ErrChecksumMismatch and does not store the body",
+			function: testStoragePutObjectChecksumSHA256Mismatch,
+		},
+
+		{
+			scenario: "PutObject without a checksum option behaves as before",
+			function: testStoragePutObjectChecksumSHA256NoOption,
+		},
+
+		{
+			scenario: "PutObject with mismatched ContentLength is rejected and does not store the body",
+			function: testStoragePutObjectContentLengthMismatch,
+			skipIf: func(bucket storage.Bucket) (bool, string) {
+				if _, ok := bucket.(*gs.Bucket); ok {
+					// Real GCS enforces Content-Length on the wire;
+					// the fake-gcs-server we run tests against is
+					// permissive. The HTTP layer doesn't reimplement
+					// validation that the destination already does.
+					return true, "fake-gcs-server does not enforce Content-Length; real GCS does"
+				}
+				if _, ok := bucket.(*storagehttp.Bucket); ok {
+					// The backend (memory) here CAN validate. What
+					// can't happen is the caller's explicit
+					// ContentLength(999) reaching it: Go's transport
+					// auto-sets the wire Content-Length from the
+					// body's Len() (the actual length), so the
+					// declared mismatch is erased before the request
+					// goes out. A real mismatch is only observable
+					// from a misbehaving non-Go client.
+					return true, "Go HTTP transport overwrites caller's declared Content-Length with the body's actual length"
 				}
 				return false, ""
 			},
@@ -821,6 +864,86 @@ func testStoragePutObjectIfNoneMatchInvalidEtag(t *testing.T, bucket storage.Buc
 
 	if _, err := bucket.PutObject(ctx, key, strings.NewReader(data), storage.IfNoneMatch("invalid")); !errors.Is(err, storage.ErrInvalidObjectTag) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256Match(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-match"
+	data := []byte("hello, checksum!")
+	sum := sha256.Sum256(data)
+
+	info, err := bucket.PutObject(ctx, key, bytes.NewReader(data), storage.ChecksumSHA256(sum))
+	if err != nil {
+		t.Fatalf("PutObject with matching checksum: %v", err)
+	}
+	if info.Size != int64(len(data)) {
+		t.Fatalf("ObjectInfo.Size = %d; want %d", info.Size, len(data))
+	}
+
+	rc, _, err := bucket.GetObject(ctx, key)
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("body mismatch: got %q want %q", got, data)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256Mismatch(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-mismatch"
+	data := []byte("hello, checksum!")
+	wrong := sha256.Sum256([]byte("decoy"))
+
+	_, err := bucket.PutObject(ctx, key, bytes.NewReader(data), storage.ChecksumSHA256(wrong))
+	if err == nil {
+		t.Fatal("expected error from checksum mismatch")
+	}
+	if !errors.Is(err, storage.ErrChecksumMismatch) {
+		t.Fatalf("err = %v; want errors.Is(err, storage.ErrChecksumMismatch)", err)
+	}
+
+	if _, err := bucket.HeadObject(ctx, key); err == nil {
+		t.Fatal("object stored despite checksum mismatch")
+	} else if !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("HeadObject after mismatch: got %v; want ErrObjectNotFound", err)
+	}
+}
+
+func testStoragePutObjectContentLengthMismatch(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-content-length-mismatch"
+	data := []byte("twelve bytes")
+
+	_, err := bucket.PutObject(ctx, key, bytes.NewReader(data), storage.ContentLength(999))
+	if err == nil {
+		t.Fatal("PutObject: expected error from declared ContentLength != streamed body length")
+	}
+
+	if _, err := bucket.HeadObject(ctx, key); err == nil {
+		t.Fatal("object stored despite content length mismatch")
+	} else if !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("HeadObject after mismatch: got %v; want ErrObjectNotFound", err)
+	}
+}
+
+func testStoragePutObjectChecksumSHA256NoOption(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	key := "test-object-checksum-noopt"
+	data := []byte("plain, no checksum")
+
+	info, err := bucket.PutObject(ctx, key, bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("PutObject without checksum: %v", err)
+	}
+	if info.Size != int64(len(data)) {
+		t.Fatalf("ObjectInfo.Size = %d; want %d", info.Size, len(data))
 	}
 }
 
