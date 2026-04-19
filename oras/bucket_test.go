@@ -445,6 +445,94 @@ func TestReadOnlyBucketGetObjectBytesRange(t *testing.T) {
 	}
 }
 
+// Regression: callers like storage.File.ReadAt and the FUSE wrapper
+// build BytesRange(off, off+len(buf)-1) without clamping to the blob
+// size, so the bucket must clamp end to size-1 instead of returning
+// ErrInvalidRange. Matches memory backend behaviour.
+func TestReadOnlyBucketGetObjectBytesRangeClampsPastEOF(t *testing.T) {
+	ctx := t.Context()
+	target := storageoras.New(memory.NewBucket())
+	files := map[string]string{"file": "0123456789"} // 10 bytes
+	pushArtifact(t, target, "v1", files, nil)
+	bucket := storageoras.NewReadOnlyBucket(target, "v1")
+
+	// Range extends past EOF: should return last 2 bytes ("89"), not error.
+	rc, _, err := bucket.GetObject(ctx, "file", storage.BytesRange(8, 99))
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "89" {
+		t.Fatalf("got %q; want 89", got)
+	}
+}
+
+// Regression: when KeyDelimiter is set, StartAfter must be compared
+// against the emitted key (e.g. "a/"), not the underlying layer title
+// ("a/x.txt"). Otherwise paginated directory listings re-emit the
+// previous page's prefix and a naive caller feeding the last key back
+// loops forever.
+func TestReadOnlyBucketListStartAfterRespectsCollapsedPrefixes(t *testing.T) {
+	ctx := t.Context()
+	target := storageoras.New(memory.NewBucket())
+	files := map[string]string{
+		"a/x.txt": "ax",
+		"a/y.txt": "ay",
+		"b/x.txt": "bx",
+	}
+	pushArtifact(t, target, "v1", files, nil)
+	bucket := storageoras.NewReadOnlyBucket(target, "v1")
+
+	// First page: list with delimiter only. Expect ["a/", "b/"].
+	var page1 []string
+	for obj, err := range bucket.ListObjects(ctx, storage.KeyDelimiter("/")) {
+		if err != nil {
+			t.Fatalf("ListObjects page 1: %v", err)
+		}
+		page1 = append(page1, obj.Key)
+	}
+	if !slices.Equal(page1, []string{"a/", "b/"}) {
+		t.Fatalf("page 1 = %v; want [a/ b/]", page1)
+	}
+
+	// Second page: feed the last key back. Must NOT re-emit "a/".
+	var page2 []string
+	for obj, err := range bucket.ListObjects(ctx, storage.KeyDelimiter("/"), storage.StartAfter("a/")) {
+		if err != nil {
+			t.Fatalf("ListObjects page 2: %v", err)
+		}
+		page2 = append(page2, obj.Key)
+	}
+	if !slices.Equal(page2, []string{"b/"}) {
+		t.Fatalf("page 2 = %v; want [b/] (must not repeat a/)", page2)
+	}
+}
+
+// Regression: HeadObject and GetObject must validate the key before
+// touching the manifest, matching the contract in
+// testStorageGetObjectInvalidPath / testStorageHeadObjectInvalidPath.
+func TestReadOnlyBucketReadInvalidKeyReturnsErrInvalidObjectKey(t *testing.T) {
+	ctx := t.Context()
+	target := storageoras.New(memory.NewBucket())
+	pushArtifact(t, target, "v1", map[string]string{"x": "x"}, nil)
+	bucket := storageoras.NewReadOnlyBucket(target, "v1")
+
+	for _, bad := range []string{"a/../b", "//", "a/.."} {
+		t.Run(bad, func(t *testing.T) {
+			if _, err := bucket.HeadObject(ctx, bad); !errors.Is(err, storage.ErrInvalidObjectKey) {
+				t.Errorf("HeadObject(%q) = %v; want ErrInvalidObjectKey", bad, err)
+			}
+			if _, _, err := bucket.GetObject(ctx, bad); !errors.Is(err, storage.ErrInvalidObjectKey) {
+				t.Errorf("GetObject(%q) = %v; want ErrInvalidObjectKey", bad, err)
+			}
+		})
+	}
+}
+
 func TestReadOnlyBucketLazyConstruction(t *testing.T) {
 	// NewReadOnlyBucket must not touch the target. Use a counter wrapper
 	// to assert zero calls until a method that needs the index runs.

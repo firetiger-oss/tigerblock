@@ -9,7 +9,6 @@ import (
 	"iter"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -96,6 +95,9 @@ func (b *readOnlyBucket) Create(ctx context.Context) error {
 }
 
 func (b *readOnlyBucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	if err := storage.ValidObjectKey(key); err != nil {
+		return storage.ObjectInfo{}, err
+	}
 	index, _, err := b.loadIndex(ctx)
 	if err != nil {
 		return storage.ObjectInfo{}, err
@@ -108,6 +110,9 @@ func (b *readOnlyBucket) HeadObject(ctx context.Context, key string) (storage.Ob
 }
 
 func (b *readOnlyBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	if err := storage.ValidObjectKey(key); err != nil {
+		return nil, storage.ObjectInfo{}, err
+	}
 	index, _, err := b.loadIndex(ctx)
 	if err != nil {
 		return nil, storage.ObjectInfo{}, err
@@ -124,18 +129,26 @@ func (b *readOnlyBucket) GetObject(ctx context.Context, key string, options ...s
 
 	getOptions := storage.NewGetOptions(options...)
 	if start, end, ok := getOptions.BytesRange(); ok {
-		// oras's Fetcher only returns the full stream; honour the
-		// range by skipping head bytes and limiting the tail.
-		if start < 0 || end < start || end >= desc.Size {
+		if err := storage.ValidObjectRange(key, start, end); err != nil {
 			body.Close()
-			return nil, storage.ObjectInfo{}, fmt.Errorf("%s: %w", key, storage.ErrInvalidRange)
+			return nil, storage.ObjectInfo{}, err
 		}
-		if _, err := io.CopyN(io.Discard, body, start); err != nil {
+		// oras's Fetcher only returns the full stream; honour the
+		// range by skipping head bytes and limiting the tail. Clamp
+		// to the blob size so callers that deliberately over-read the
+		// tail (e.g. storage.File.ReadAt, FUSE) get a short read
+		// instead of ErrInvalidRange — matches the memory backend.
+		skip := min(desc.Size, start)
+		take := min(desc.Size, end+1) - skip
+		if take < 0 {
+			take = 0
+		}
+		if _, err := io.CopyN(io.Discard, body, skip); err != nil {
 			body.Close()
 			return nil, storage.ObjectInfo{}, err
 		}
 		body = readerCloser{
-			Reader: io.LimitReader(body, end-start+1),
+			Reader: io.LimitReader(body, take),
 			Closer: body,
 		}
 	}
@@ -218,54 +231,54 @@ func (b *readOnlyBucket) PresignDeleteObject(ctx context.Context, key string, ex
 
 // emitListing yields entries to yield in title-sorted order, respecting
 // KeyPrefix, StartAfter, MaxKeys, and KeyDelimiter. Returns false if
-// the consumer asked to stop.
+// the consumer asked to stop. StartAfter is compared against the
+// emitted key (post-delimiter collapse), not the underlying title, so
+// paginated directory listings advance correctly when the caller feeds
+// the last returned key back in.
 func emitListing(yield func(storage.Object, error) bool, index map[string]ocispec.Descriptor, titles []string, opts *storage.ListOptions) bool {
 	prefix := opts.KeyPrefix()
 	startAfter := opts.StartAfter()
 	delimiter := opts.KeyDelimiter()
 	maxKeys := opts.MaxKeys()
 
-	// Skip past startAfter using the sorted titles. titles is sorted
-	// ascending; sort.SearchStrings finds the first index >= target.
-	begin := 0
-	if startAfter != "" {
-		begin = sort.SearchStrings(titles, startAfter)
-		if begin < len(titles) && titles[begin] == startAfter {
-			begin++
-		}
-	}
-
 	emitted := 0
 	seenPrefix := make(map[string]struct{})
-	for _, title := range titles[begin:] {
+	for _, title := range titles {
 		if !strings.HasPrefix(title, prefix) {
 			continue
 		}
+
+		// Resolve the emitted key first — it may be a common prefix
+		// rather than the raw title — so StartAfter is compared
+		// against what the consumer actually saw on the previous page.
 		key := title
+		isPrefix := false
 		if delimiter != "" {
 			rest := title[len(prefix):]
 			if i := strings.Index(rest, delimiter); i >= 0 {
-				common := prefix + rest[:i+len(delimiter)]
-				if _, dup := seenPrefix[common]; dup {
-					continue
-				}
-				seenPrefix[common] = struct{}{}
-				if maxKeys > 0 && emitted >= maxKeys {
-					return true
-				}
-				emitted++
-				if !yield(storage.Object{Key: common}, nil) {
-					return false
-				}
-				continue
+				key = prefix + rest[:i+len(delimiter)]
+				isPrefix = true
 			}
 		}
-		desc := index[title]
+
+		if startAfter != "" && key <= startAfter {
+			continue
+		}
+		if _, dup := seenPrefix[key]; dup {
+			continue
+		}
+		seenPrefix[key] = struct{}{}
+
 		if maxKeys > 0 && emitted >= maxKeys {
 			return true
 		}
 		emitted++
-		if !yield(storage.Object{Key: key, Size: desc.Size}, nil) {
+
+		obj := storage.Object{Key: key}
+		if !isPrefix {
+			obj.Size = index[title].Size
+		}
+		if !yield(obj, nil) {
 			return false
 		}
 	}
