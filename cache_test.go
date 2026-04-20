@@ -18,6 +18,59 @@ func TestCache(t *testing.T) {
 	})
 }
 
+// TestCacheOpenEndedRangeHitsObjectCache verifies that an open-ended
+// BytesRange(start, -1) served after a prior plain GetObject reuses
+// the full-object cache entry instead of round-tripping to the
+// underlying bucket. The page cache can't help for end == -1 (it
+// needs a concrete end to compute page indices), but the object
+// cache is already populated and can be sliced.
+func TestCacheOpenEndedRangeHitsObjectCache(t *testing.T) {
+	counting := &countingGetBucket{Bucket: new(memory.Bucket)}
+	ctx := t.Context()
+	body := []byte("hello, world!")
+	if _, err := counting.PutObject(ctx, "k", bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	bucket := storage.NewCache().AdaptBucket(counting)
+
+	// Prime the object cache with a plain GetObject.
+	r, _, err := bucket.GetObject(ctx, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(r)
+	r.Close()
+	primingCalls := counting.gets
+
+	// Open-ended range — should slice the cached body, not hit the
+	// underlying bucket again.
+	r, _, err = bucket.GetObject(ctx, "k", storage.BytesRange(7, -1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if want := body[7:]; !bytes.Equal(got, want) {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	if counting.gets > primingCalls {
+		t.Errorf("underlying bucket was called %d extra times; expected the open-ended range to be served from the object cache", counting.gets-primingCalls)
+	}
+}
+
+type countingGetBucket struct {
+	storage.Bucket
+	gets int
+}
+
+func (b *countingGetBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	b.gets++
+	return b.Bucket.GetObject(ctx, key, options...)
+}
+
 // TestCacheDivisionByZero tests the division by zero bug when pageSize is set to 0
 func TestCacheDivisionByZero(t *testing.T) {
 	// Create a cache with pageSize=0 which should cause division by zero

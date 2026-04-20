@@ -590,13 +590,11 @@ func TestCacheTailReadPastEndDoesNotLeakFDs(t *testing.T) {
 // TestCacheTailReadUsesCachedFileSizeNotInfoSize covers a GCS-style
 // transcoded object cached through file.NewCache: the bucket writes
 // the decompressed bytes to disk, but ObjectInfo.Size reports the
-// stored compressed length. The cache-miss path's range slicing must
-// clamp against the cached file's actual size, not info.Size —
-// otherwise tail reads are truncated to compressedSize - start bytes.
+// stored compressed length. Both the cache-miss path (range slicing
+// directly after writing the body) and the subsequent cache-hit path
+// (readObjectInfo) must use the cached file's actual size, not
+// info.Size — otherwise tail reads are truncated.
 func TestCacheTailReadUsesCachedFileSizeNotInfoSize(t *testing.T) {
-	// A fresh cache + ranged first GetObject exercises the cache-miss
-	// branch in getObjectFromBucket, which is where info.Size from the
-	// backend is used directly (rather than readObjectInfo's f.Stat()).
 	cacheDir := t.TempDir()
 	ctx := t.Context()
 
@@ -611,21 +609,39 @@ func TestCacheTailReadUsesCachedFileSizeNotInfoSize(t *testing.T) {
 	}
 	bucket := NewCache(cacheDir, math.MaxInt64).AdaptBucket(underlying)
 
-	// Cache-miss + open-ended tail read: must not be clamped to
-	// compressedSize.
-	r, _, err := bucket.GetObject(ctx, "k", storage.BytesRange(10, -1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := body[10:]
-	if len(got) != len(want) {
-		t.Fatalf("body length = %d, want %d (clamped to info.Size?)", len(got), len(want))
-	}
+	t.Run("cache miss", func(t *testing.T) {
+		r, _, err := bucket.GetObject(ctx, "k", storage.BytesRange(10, -1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := body[10:]; len(got) != len(want) {
+			t.Fatalf("body length = %d, want %d (clamped to info.Size?)", len(got), len(want))
+		}
+	})
+
+	t.Run("cache hit", func(t *testing.T) {
+		// The prior cache-miss test primed the cache file. This run
+		// exercises the cache-hit path in cachedBucket.GetObject,
+		// where the returned ObjectInfo comes from readObjectInfo and
+		// its Size is the file's on-disk size.
+		r, _, err := bucket.GetObject(ctx, "k", storage.BytesRange(100, -1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := body[100:]; len(got) != len(want) {
+			t.Fatalf("body length = %d, want %d (cache hit clamped to stored info.Size?)", len(got), len(want))
+		}
+	})
 }
 
 // sizeLyingBucket simulates a backend that returns an ObjectInfo.Size
