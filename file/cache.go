@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -335,7 +334,7 @@ func (b *cachedBucket) GetObject(ctx context.Context, key string, options ...sto
 			effEnd = cachedInfo.Size - 1
 		}
 		if start >= cachedInfo.Size {
-			body = io.NopCloser(strings.NewReader(""))
+			body = emptyBodyClosing(cachedFile)
 		} else {
 			body = bytesRangeReadCloser(cachedFile, start, effEnd)
 		}
@@ -434,7 +433,7 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 			effEnd = info.Size - 1
 		}
 		if start >= info.Size {
-			body = io.NopCloser(strings.NewReader(""))
+			body = emptyBodyClosing(f)
 		} else {
 			body = bytesRangeReadCloser(f, start, effEnd)
 		}

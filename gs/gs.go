@@ -184,17 +184,29 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		Metadata:        attrs.Metadata,
 	}
 
+	// Objects stored with Content-Encoding: gzip are served decompressed
+	// by GCS unless the client opts into compressed transfer. In that
+	// case attrs.Size is the stored (compressed) size while the caller's
+	// BytesRange offsets are in decompressed-byte space, so the two are
+	// not directly comparable: the past-end short-circuit and the
+	// clamping of end to attrs.Size-1 both become unsafe.
+	// See https://cloud.google.com/storage/docs/transcoding
+	transcoded := attrs.ContentEncoding == "gzip"
+
 	var reader *gcloud.Reader
 	if hasRange {
 		if err := storage.ValidObjectRange(key, start, end); err != nil {
 			return nil, storage.ObjectInfo{}, err
 		}
-		if start >= attrs.Size {
+		if !transcoded && start >= attrs.Size {
 			return io.NopCloser(strings.NewReader("")), object, nil
 		}
 		length := int64(-1)
 		if end >= 0 {
-			clampedEnd := min(end, attrs.Size-1)
+			clampedEnd := end
+			if !transcoded {
+				clampedEnd = min(end, attrs.Size-1)
+			}
 			length = (clampedEnd + 1) - start
 		}
 		reader, err = obj.NewRangeReader(ctx, start, length)

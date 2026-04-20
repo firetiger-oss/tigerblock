@@ -1,6 +1,10 @@
 package gs_test
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
+	"strings"
 	"testing"
 
 	gcloud "cloud.google.com/go/storage"
@@ -21,6 +25,76 @@ func TestGoogleCloudStorageBucket(t *testing.T) {
 		}
 		return gs.NewBucket(googleClient, gsClient, bucket), nil
 	})
+}
+
+// TestGCSTailRangeAgainstTranscodedObject guards the case where a GCS
+// object is stored gzip-compressed (Content-Encoding: gzip) and served
+// decompressed on read. Object attributes report the compressed size,
+// but a caller's BytesRange offsets are in decompressed-byte space.
+// The bucket must not short-circuit or clamp range requests using the
+// compressed attrs.Size, since an offset past that size can still be
+// valid in the decompressed stream.
+func TestGCSTailRangeAgainstTranscodedObject(t *testing.T) {
+	server, googleClient, bucketName := newServerAndClient(t)
+	defer server.Stop()
+
+	decompressed := strings.Repeat("hello world! ", 100) // 1300 bytes
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte(decompressed)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compressed := buf.Bytes()
+	if len(compressed) >= len(decompressed) {
+		t.Fatalf("setup: compressed (%d) should be smaller than decompressed (%d)", len(compressed), len(decompressed))
+	}
+
+	server.CreateObject(fakestorage.Object{
+		ObjectAttrs: fakestorage.ObjectAttrs{
+			BucketName:      bucketName,
+			Name:            "gzipped",
+			ContentEncoding: "gzip",
+			ContentType:     "text/plain",
+		},
+		Content: compressed,
+	})
+
+	gsClient, err := gsclient.NewGoogleCloudStorageClient(t.Context(), bucketName, gsclient.WithHTTPClient(server.HTTPClient()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := gs.NewBucket(googleClient, gsClient, bucketName)
+
+	// Offset between compressed size and decompressed size — the bucket
+	// must not short-circuit this to an empty body using attrs.Size.
+	const offset = int64(100)
+	if offset <= int64(len(compressed)) {
+		t.Fatalf("setup: need offset past compressed size (got %d vs %d)", offset, len(compressed))
+	}
+	r, _, err := bucket.GetObject(t.Context(), "gzipped", storage.BytesRange(offset, -1))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+	want := decompressed[offset:]
+	if string(got) != want {
+		t.Fatalf("body mismatch: got %d bytes, want %d bytes (first bytes: got %q want %q)",
+			len(got), len(want), head(string(got), 40), head(want, 40))
+	}
+}
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func newServerAndClient(t *testing.T) (*fakestorage.Server, *gcloud.Client, string) {

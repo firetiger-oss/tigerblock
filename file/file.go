@@ -74,6 +74,19 @@ func bytesRangeReadCloser(f *os.File, start, end int64) io.ReadCloser {
 	}
 }
 
+// emptyBodyClosing returns a ReadCloser that yields zero bytes and
+// closes f when Close is called. Used for out-of-range reads that
+// would otherwise leak f via io.NopCloser.
+func emptyBodyClosing(f *os.File) io.ReadCloser {
+	return struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: strings.NewReader(""),
+		Closer: f,
+	}
+}
+
 type Bucket struct {
 	root string
 }

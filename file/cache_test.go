@@ -4,6 +4,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -507,4 +508,80 @@ func TestCacheRevalidation(t *testing.T) {
 	}
 
 	t.Logf("Cache revalidation test completed successfully")
+}
+
+// TestCacheTailReadPastEndDoesNotLeakFDs verifies that calling GetObject
+// with BytesRange(start, -1) where start >= object size — a valid
+// past-EOF tail read — closes the underlying cache file when the
+// returned reader is closed. A prior revision returned a
+// io.NopCloser(strings.NewReader("")) that silently dropped the open
+// *os.File, so repeated past-end reads (common in File.ReadAt and the
+// FUSE adapter) would exhaust the process file descriptor limit.
+//
+// The test temporarily lowers the process's open-file soft limit so a
+// leak manifests as a deterministic "too many open files" error on any
+// Unix host, independent of whatever the user's default ulimit is.
+func TestCacheTailReadPastEndDoesNotLeakFDs(t *testing.T) {
+	store := t.TempDir()
+	cacheDir := t.TempDir()
+	ctx := t.Context()
+
+	const key = "test-object"
+	const value = "hello, world!"
+
+	underlying, err := NewRegistry(store).LoadBucket(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := underlying.PutObject(ctx, key, strings.NewReader(value), storage.CacheControl("max-age=3600")); err != nil {
+		t.Fatal(err)
+	}
+	bucket := NewCache(cacheDir, math.MaxInt64).AdaptBucket(underlying)
+
+	// Prime the cache so subsequent reads hit the cache-hit path.
+	r, _, err := bucket.GetObject(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+
+	// Lower the soft limit so a per-iteration fd leak exhausts fds fast.
+	var orig syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &orig); err != nil {
+		t.Skipf("getrlimit: %v", err)
+	}
+	lowered := orig
+	lowered.Cur = 128
+	if orig.Max < lowered.Cur {
+		lowered.Cur = orig.Max
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lowered); err != nil {
+		t.Skipf("setrlimit: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &orig) })
+
+	// Iterate past the lowered soft limit so any leak manifests as
+	// "too many open files".
+	const iterations = 512
+	for i := 0; i < iterations; i++ {
+		r, _, err := bucket.GetObject(ctx, key, storage.BytesRange(int64(len(value)), -1))
+		if err != nil {
+			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		}
+		b, err := io.ReadAll(r)
+		if err != nil {
+			r.Close()
+			t.Fatalf("iteration %d: unexpected read error: %v", i, err)
+		}
+		if len(b) != 0 {
+			r.Close()
+			t.Fatalf("iteration %d: expected empty body, got %q", i, b)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatalf("iteration %d: unexpected close error: %v", i, err)
+		}
+	}
 }
