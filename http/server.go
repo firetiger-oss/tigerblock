@@ -376,15 +376,14 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 			// backend serves transcoded bytes whose length doesn't
 			// match the stored size). Drop the Content-Length that
 			// setObject installed and let Go's http server send
-			// Transfer-Encoding: chunked — the body streams to EOF
-			// whatever its actual length. Content-Range is best-effort
-			// (it still derives from object.Size, so transcoded
-			// responses may carry a misleading range), but no
-			// truncation.
+			// Transfer-Encoding: chunked so the body streams to EOF
+			// at its actual length. Content-Range is still emitted
+			// (using the best information we have from object.Size)
+			// so clients can recover the total-size field it carries
+			// even if the first-/last-byte endpoints are imprecise
+			// for transcoded bodies.
 			header.Del("Content-Length")
-			if n := httpRange.ContentLength(object.Size); n > 0 {
-				setContentRange(header, httpRange.ContentRange(object.Size))
-			}
+			setContentRange(header, httpRange.ContentRange(object.Size))
 			w.WriteHeader(http.StatusPartialContent)
 			io.Copy(w, buf)
 			return

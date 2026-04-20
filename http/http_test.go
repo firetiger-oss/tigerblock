@@ -419,6 +419,43 @@ func TestHTTPServerReturns416ForStartPastEnd(t *testing.T) {
 	}
 }
 
+// TestHTTPServerEmitsContentRangeForSizeLyingBackend makes sure a
+// ranged 206 from a size-lying backend still carries a Content-Range
+// header. The paired http client (and our S3 adapter) reads
+// ObjectInfo.Size from Content-Range when X-Amz-Object-Size is not
+// present — dropping the header on these responses would propagate
+// Size = -1 to callers.
+func TestHTTPServerEmitsContentRangeForSizeLyingBackend(t *testing.T) {
+	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
+	backend := &transcodedBucket{
+		info: storage.ObjectInfo{
+			Size:        60,
+			ContentType: "text/plain",
+		},
+		body: body,
+	}
+	server := httptest.NewServer(storagehttp.BucketHandler(backend))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/transcoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=100-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Range"); got == "" {
+		t.Errorf("Content-Range missing — clients can't recover Size from the 206 response")
+	}
+}
+
 // TestHTTPServerDoesNotTruncateTranscodedTailRange reproduces the
 // specific gs-transcoded-through-HTTP-server scenario where start is
 // smaller than ObjectInfo.Size (the compressed stored size) but the
@@ -502,25 +539,6 @@ func TestHTTPServerStreamsNonEmptyRangeEvenWhenSizeLooksWrong(t *testing.T) {
 
 	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 		t.Fatalf("server returned 416 for a range whose backend reader is non-empty; should stream the body instead")
-	}
-	// When the backend's reader length doesn't line up with object.Size
-	// (transcoded gs), the server can't build a correct Content-Range
-	// or Content-Length from object.Size alone — it should omit them
-	// rather than emit something malformed like "bytes 100-59/60".
-	if got := resp.Header.Get("Content-Range"); got != "" {
-		if strings.HasPrefix(got, "bytes ") {
-			remainder := strings.TrimPrefix(got, "bytes ")
-			rangePart, _, _ := strings.Cut(remainder, "/")
-			s, e, ok := strings.Cut(rangePart, "-")
-			if ok {
-				var start, end int64
-				_, errStart := fmt.Sscanf(s, "%d", &start)
-				_, errEnd := fmt.Sscanf(e, "%d", &end)
-				if errStart == nil && errEnd == nil && end < start {
-					t.Errorf("Content-Range = %q has end < start, which is malformed", got)
-				}
-			}
-		}
 	}
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
