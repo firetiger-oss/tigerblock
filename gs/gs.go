@@ -165,7 +165,18 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		return nil, storage.ObjectInfo{}, err
 	}
 
-	obj := b.client.Bucket(b.bucket).Object(key)
+	// ReadCompressed(true) opts out of GCS's decompressive transcoding.
+	// Without it, objects uploaded with Content-Encoding: gzip are
+	// silently decompressed on read: attrs.Size is the stored
+	// compressed length but the body the caller reads is longer, so
+	// range offsets and Content-Length/Content-Range arithmetic
+	// downstream (cache adapters, HTTP adapter) break. With it, GCS
+	// serves the stored bytes as-is with Content-Encoding: gzip on
+	// the wire, attrs.Size matches the body, and callers that want
+	// the decompressed content apply their own gzip.Reader — the
+	// same contract every other backend in this package already uses.
+	// https://cloud.google.com/storage/docs/transcoding
+	obj := b.client.Bucket(b.bucket).Object(key).ReadCompressed(true)
 	attrs, err := obj.Attrs(ctx)
 	if err != nil {
 		return nil, storage.ObjectInfo{}, makeIcebergError(err)
@@ -174,37 +185,50 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 	getOptions := storage.NewGetOptions(options...)
 	start, end, hasRange := getOptions.BytesRange()
 
-	var reader *gcloud.Reader
-	if hasRange {
-		if err := storage.ValidObjectRange(key, start, end); err != nil {
-			return nil, storage.ObjectInfo{}, err
-		}
-		reader, err = obj.NewRangeReader(ctx, start, (end+1)-start)
-	} else {
-		reader, err = obj.NewReader(ctx)
-	}
-	if err != nil {
-		return nil, storage.ObjectInfo{}, makeIcebergError(err)
-	}
-
-	// https://cloud.google.com/storage/docs/transcoding
-	if hasRange && reader.Attrs.Decompressed {
-		if _, err := io.CopyN(io.Discard, reader, start); err != nil {
-			reader.Close()
-			return nil, storage.ObjectInfo{}, err
-		}
-	}
-
 	object := storage.ObjectInfo{
 		CacheControl:    attrs.CacheControl,
 		ContentType:     attrs.ContentType,
-		ContentEncoding: reader.Attrs.ContentEncoding,
+		ContentEncoding: attrs.ContentEncoding,
 		ETag:            makeETag(attrs.Generation),
 		Size:            attrs.Size,
 		LastModified:    attrs.Updated,
 		Metadata:        attrs.Metadata,
 	}
+
+	var reader *gcloud.Reader
+	if hasRange {
+		if err := storage.ValidObjectRange(key, start, end); err != nil {
+			return nil, storage.ObjectInfo{}, err
+		}
+		length := int64(-1)
+		if end >= 0 {
+			length = (end + 1) - start
+		}
+		reader, err = obj.NewRangeReader(ctx, start, length)
+		if err != nil {
+			// GCS returns 416 Range Not Satisfiable when the start
+			// offset is past the end of the stored object. Translate
+			// to an empty reader so the BytesRange(offset, -1)
+			// contract (empty body + nil error past end) holds for
+			// gs the same as it does for s3/http.
+			if isRangeNotSatisfiable(err) {
+				return io.NopCloser(strings.NewReader("")), object, nil
+			}
+			return nil, storage.ObjectInfo{}, makeIcebergError(err)
+		}
+	} else {
+		reader, err = obj.NewReader(ctx)
+		if err != nil {
+			return nil, storage.ObjectInfo{}, makeIcebergError(err)
+		}
+	}
+
 	return reader, object, nil
+}
+
+func isRangeNotSatisfiable(err error) bool {
+	var gerr *googleapi.Error
+	return errors.As(err, &gerr) && gerr.Code == http.StatusRequestedRangeNotSatisfiable
 }
 
 func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, options ...storage.PutOption) (storage.ObjectInfo, error) {
@@ -522,16 +546,9 @@ func (b *Bucket) PresignGetObject(ctx context.Context, key string, expiration ti
 		return "", storage.ErrInvalidObjectKey
 	}
 
-	getOptions := storage.NewGetOptions(options...)
-	opts := &gcloud.SignedURLOptions{
-		Scheme:  gcloud.SigningSchemeV4,
-		Method:  "GET",
-		Expires: time.Now().Add(expiration),
-	}
-
-	// Add range header if specified
-	if start, end, ok := getOptions.BytesRange(); ok {
-		opts.Headers = append(opts.Headers, "Range:bytes="+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(end, 10))
+	opts, err := signedGetOptions(key, expiration, options...)
+	if err != nil {
+		return "", err
 	}
 
 	url, err := b.client.Bucket(b.bucket).SignedURL(key, opts)
@@ -539,6 +556,34 @@ func (b *Bucket) PresignGetObject(ctx context.Context, key string, expiration ti
 		return "", makeIcebergError(err)
 	}
 	return url, nil
+}
+
+// signedGetOptions builds the gcloud.SignedURLOptions for a GET
+// presigned URL. Signing Accept-Encoding to opt out of GCS
+// transcoding isn't safe: browsers, curl, and proxies don't all send
+// that header value verbatim, so the resulting URL would fail
+// signature verification for ordinary consumers. That means presigned
+// GETs on gzip-encoded objects still go through GCS's default
+// decompressive transcoding — this PR scopes its transcoding opt-out
+// to the direct GetObject path.
+func signedGetOptions(key string, expiration time.Duration, options ...storage.GetOption) (*gcloud.SignedURLOptions, error) {
+	opts := &gcloud.SignedURLOptions{
+		Scheme:  gcloud.SigningSchemeV4,
+		Method:  "GET",
+		Expires: time.Now().Add(expiration),
+	}
+	getOptions := storage.NewGetOptions(options...)
+	if start, end, ok := getOptions.BytesRange(); ok {
+		if err := storage.ValidObjectRange(key, start, end); err != nil {
+			return nil, err
+		}
+		header := "Range:bytes=" + strconv.FormatInt(start, 10) + "-"
+		if end >= 0 {
+			header += strconv.FormatInt(end, 10)
+		}
+		opts.Headers = append(opts.Headers, header)
+	}
+	return opts, nil
 }
 
 func (b *Bucket) PresignPutObject(ctx context.Context, key string, expiration time.Duration, options ...storage.PutOption) (string, error) {

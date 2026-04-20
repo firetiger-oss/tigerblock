@@ -673,8 +673,13 @@ func validObjectKey(key string) bool {
 	return fs.ValidPath(key)
 }
 
+// ValidObjectRange validates a byte range as passed to [BytesRange].
+// The range is inclusive on both ends. An end of -1 means "to the end
+// of the object"; other negative end values are invalid. A negative
+// start is always invalid, as is a non-negative end that precedes the
+// start.
 func ValidObjectRange(key string, start, end int64) error {
-	if start < 0 || end < 0 || end < start {
+	if start < 0 || end < -1 || (end >= 0 && end < start) {
 		return fmt.Errorf("%s: %w (start=%d, end=%d)", key, ErrInvalidRange, start, end)
 	}
 	return nil

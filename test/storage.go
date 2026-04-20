@@ -94,6 +94,11 @@ func TestStorage(t *testing.T, loadBucket func(*testing.T) (storage.Bucket, erro
 		},
 
 		{
+			scenario: "open-ended ranges (end == -1) read to end of object and tolerate offsets past end",
+			function: testStorageGetObjectTailRange,
+		},
+
+		{
 			scenario: "objects written to the bucket can be read",
 			function: testStorageWriteAndGetObject,
 		},
@@ -466,9 +471,61 @@ func testStorageGetObjectRangeNegativeOffset(t *testing.T, bucket storage.Bucket
 		t.Fatalf("unexpected object size: %d != 13", object.Size)
 	}
 
-	_, _, err = bucket.GetObject(ctx, "test-object", storage.BytesRange(-1, 1))
-	if !errors.Is(err, storage.ErrInvalidRange) {
-		t.Fatalf("unexpected error: %v", err)
+	cases := []struct {
+		name  string
+		start int64
+		end   int64
+	}{
+		{name: "negative start", start: -1, end: 1},
+		{name: "end less than -1", start: 0, end: -2},
+		{name: "end before start", start: 5, end: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := bucket.GetObject(ctx, "test-object", storage.BytesRange(tc.start, tc.end))
+			if !errors.Is(err, storage.ErrInvalidRange) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func testStorageGetObjectTailRange(t *testing.T, bucket storage.Bucket) {
+	ctx := t.Context()
+	const key = "test-object"
+	const data = "abcdefghij" // 10 bytes
+
+	if _, err := bucket.PutObject(ctx, key, strings.NewReader(data)); err != nil {
+		t.Fatal("unexpected error writing object:", err)
+	}
+
+	cases := []struct {
+		name  string
+		start int64
+		end   int64
+		want  string
+	}{
+		{name: "full body via open-ended range", start: 0, end: -1, want: data},
+		{name: "tail from mid-object", start: 3, end: -1, want: data[3:]},
+		{name: "tail at end of object yields empty", start: int64(len(data)), end: -1, want: ""},
+		{name: "tail past end of object yields empty", start: int64(len(data)) + 50, end: -1, want: ""},
+		{name: "closed range clamped past end", start: 8, end: 99, want: data[8:]},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _, err := bucket.GetObject(ctx, key, storage.BytesRange(tc.start, tc.end))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer r.Close()
+			b, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatalf("unexpected error reading body: %v", err)
+			}
+			if string(b) != tc.want {
+				t.Fatalf("unexpected body: got %q, want %q", b, tc.want)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,140 @@ func TestCache(t *testing.T) {
 	storagetest.TestStorage(t, func(*testing.T) (storage.Bucket, error) {
 		return storage.NewCache().AdaptBucket(new(memory.Bucket)), nil
 	})
+}
+
+// TestCacheOpenEndedRangeServesFromCachedObject verifies that an
+// open-ended BytesRange(start, -1) consults the full-object cache
+// when it's already populated, rather than round-tripping to the
+// backend. Without this, a tail read can observe newer backend state
+// than a prior cached full read — a consistency regression.
+func TestCacheOpenEndedRangeServesFromCachedObject(t *testing.T) {
+	counting := &countingGetBucket{Bucket: new(memory.Bucket)}
+	ctx := t.Context()
+	body := []byte("hello, world!")
+	if _, err := counting.PutObject(ctx, "k", bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	bucket := storage.NewCache().AdaptBucket(counting)
+
+	// Prime the object cache with a plain GetObject.
+	r, _, err := bucket.GetObject(ctx, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(r)
+	r.Close()
+	primingCalls := counting.gets
+
+	// Open-ended range — should slice the cached body, not hit the
+	// underlying bucket again.
+	r, _, err = bucket.GetObject(ctx, "k", storage.BytesRange(7, -1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if want := body[7:]; !bytes.Equal(got, want) {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	if counting.gets > primingCalls {
+		t.Errorf("underlying bucket was called %d extra times; expected the open-ended range to be served from the object cache", counting.gets-primingCalls)
+	}
+}
+
+type countingGetBucket struct {
+	storage.Bucket
+	gets int
+}
+
+func (b *countingGetBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	b.gets++
+	return b.Bucket.GetObject(ctx, key, options...)
+}
+
+// TestCacheOpenEndedRangeDoesNotDownloadUncachedFullObject verifies
+// the converse: when the object is NOT already cached, an open-ended
+// tail read delegates to the underlying bucket's native range support
+// instead of downloading the whole object.
+func TestCacheOpenEndedRangeDoesNotDownloadUncachedFullObject(t *testing.T) {
+	observer := &rangeObservingBucket{Bucket: new(memory.Bucket)}
+	ctx := t.Context()
+	body := []byte("hello, world!")
+	if _, err := observer.PutObject(ctx, "k", bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	bucket := storage.NewCache().AdaptBucket(observer)
+
+	r, _, err := bucket.GetObject(ctx, "k", storage.BytesRange(7, -1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(r)
+	r.Close()
+
+	if !observer.sawRange {
+		t.Errorf("expected the underlying bucket to receive a ranged GetObject (avoiding a full download), but it was called without a BytesRange option")
+	}
+}
+
+type rangeObservingBucket struct {
+	storage.Bucket
+	sawRange bool
+}
+
+func (b *rangeObservingBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	getOptions := storage.NewGetOptions(options...)
+	if _, _, ok := getOptions.BytesRange(); ok {
+		b.sawRange = true
+	}
+	return b.Bucket.GetObject(ctx, key, options...)
+}
+
+// TestCacheObjectCacheHandlesSizeLyingBackend exercises the case where
+// the backend's ObjectInfo.Size understates the reader's actual byte
+// length (the gs gzip-transcoding case). The full-object cache path
+// must capture the real body length, not truncate to info.Size.
+func TestCacheObjectCacheHandlesSizeLyingBackend(t *testing.T) {
+	fullBody := strings.Repeat("decompressed ", 200) // ~2600 bytes
+	backend := &sizeLyingObjectBucket{
+		info: storage.ObjectInfo{
+			Size: 60, // pretend stored (compressed) size
+		},
+		body: fullBody,
+	}
+	bucket := storage.NewCache().AdaptBucket(backend)
+
+	r, _, err := bucket.GetObject(t.Context(), "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if len(got) != len(fullBody) {
+		t.Fatalf("body length = %d, want %d (object cache allocated info.Size and truncated?)", len(got), len(fullBody))
+	}
+}
+
+type sizeLyingObjectBucket struct {
+	storage.Bucket
+	info storage.ObjectInfo
+	body string
+}
+
+func (b *sizeLyingObjectBucket) Location() string { return "mock://lies-obj" }
+
+func (b *sizeLyingObjectBucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	return b.info, nil
+}
+
+func (b *sizeLyingObjectBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	return io.NopCloser(strings.NewReader(b.body)), b.info, nil
 }
 
 // TestCacheDivisionByZero tests the division by zero bug when pageSize is set to 0

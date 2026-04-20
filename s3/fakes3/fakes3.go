@@ -38,6 +38,25 @@ type multipartUpload struct {
 	data  bytes.Buffer
 }
 
+// parseBytesRange parses the subset of HTTP Range header values emitted
+// by the s3 backend client: "bytes=N-M" (closed) and "bytes=N-" (open).
+func parseBytesRange(header string) (start, end int64, err error) {
+	rest, ok := strings.CutPrefix(header, "bytes=")
+	if !ok {
+		return 0, 0, fmt.Errorf("invalid range format: %q", header)
+	}
+	if strings.HasSuffix(rest, "-") {
+		if _, err := fmt.Sscanf(rest, "%d-", &start); err != nil {
+			return 0, 0, fmt.Errorf("reading bytes range: %w", err)
+		}
+		return start, -1, nil
+	}
+	if _, err := fmt.Sscanf(rest, "%d-%d", &start, &end); err != nil {
+		return 0, 0, fmt.Errorf("reading bytes range: %w", err)
+	}
+	return start, end, nil
+}
+
 func (c *Client) CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
 	if bucket := aws.ToString(params.Bucket); bucket != c.bucket {
 		return nil, fmt.Errorf("cannot create bucket: %s", bucket)
@@ -88,9 +107,9 @@ func (c *Client) GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 	}
 	var options []storage.GetOption
 	if params.Range != nil {
-		var start, end int64
-		if _, err := fmt.Sscanf(aws.ToString(params.Range), "bytes=%d-%d", &start, &end); err != nil {
-			return nil, fmt.Errorf("reading bytes range: %w", err)
+		start, end, err := parseBytesRange(aws.ToString(params.Range))
+		if err != nil {
+			return nil, err
 		}
 		options = append(options, storage.BytesRange(start, end))
 	}

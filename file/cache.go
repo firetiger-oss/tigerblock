@@ -329,7 +329,18 @@ func (b *cachedBucket) GetObject(ctx context.Context, key string, options ...sto
 
 	body = io.ReadCloser(cachedFile)
 	if hasBytesRange {
-		body = bytesRangeReadCloser(cachedFile, start, end)
+		effEnd := end
+		if effEnd < 0 {
+			effEnd = cachedInfo.Size - 1
+		}
+		if start >= cachedInfo.Size {
+			if err := seekToEnd(cachedFile); err != nil {
+				return nil, cachedInfo, err
+			}
+			body = cachedFile
+		} else {
+			body = bytesRangeReadCloser(cachedFile, start, effEnd)
+		}
 	}
 	b.lookup(cachedFile.Name())
 	return body, cachedInfo, nil
@@ -365,13 +376,27 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 	if err != nil {
 		if hasBytesRange {
 			io.CopyN(io.Discard, body, start)
-			body = &struct {
-				io.LimitedReader
-				io.Closer
-			}{
-				LimitedReader: io.LimitedReader{R: body, N: end - start + 1},
-				Closer:        body,
+			if end >= 0 {
+				// Closed range: cap to end-start+1. info.Size is not
+				// used here because, for backends like transcoded gs,
+				// it can be smaller than the actual body length and
+				// would truncate the slice the caller asked for.
+				limit := end - start + 1
+				if limit < 0 {
+					limit = 0
+				}
+				body = &struct {
+					io.LimitedReader
+					io.Closer
+				}{
+					LimitedReader: io.LimitedReader{R: body, N: limit},
+					Closer:        body,
+				}
 			}
+			// For open-ended ranges (end < 0) stream the tail to EOF
+			// without wrapping in a LimitedReader — we don't know the
+			// true body length and clamping via info.Size would
+			// truncate transcoded tails.
 		}
 		return body, info, nil
 	}
@@ -410,9 +435,32 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		return b.bucket.GetObject(ctx, key)
 	}
 
+	// info.Size can be smaller than the bytes we just wrote (the
+	// gs transcoded case: stored compressed length + decompressed
+	// body). Use the on-disk size as the authoritative value for
+	// both clamping and the returned ObjectInfo so callers get a
+	// coherent (body, info) pair.
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, info, err
+	}
+	fileSize := fi.Size()
+	info.Size = fileSize
+
 	body = io.ReadCloser(f)
 	if hasBytesRange {
-		body = bytesRangeReadCloser(f, start, end)
+		effEnd := end
+		if effEnd < 0 || effEnd >= fileSize {
+			effEnd = fileSize - 1
+		}
+		if start >= fileSize {
+			if err := seekToEnd(f); err != nil {
+				return nil, info, err
+			}
+			body = f
+		} else {
+			body = bytesRangeReadCloser(f, start, effEnd)
+		}
 	}
 
 	b.lookup(f.Name())

@@ -148,6 +148,9 @@ func (b *readOnlyBucket) GetObject(ctx context.Context, key string, options ...s
 		// to the blob size so callers that deliberately over-read the
 		// tail (e.g. storage.File.ReadAt, FUSE) get a short read
 		// instead of ErrInvalidRange — matches the memory backend.
+		if end < 0 {
+			end = desc.Size - 1
+		}
 		skip := min(desc.Size, start)
 		take := min(desc.Size, end+1) - skip
 		if take < 0 {

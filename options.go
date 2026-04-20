@@ -24,6 +24,13 @@ func (get *GetOptions) BytesRange() (start, end int64, ok bool) {
 	return get.start, get.end, get.byteRange
 }
 
+// BytesRange requests a specific byte range of an object, inclusive on
+// both ends. Passing -1 for end means "to the end of the object" and
+// maps onto native open-ended range support in HTTP, S3, and GCS. A
+// read at start == object size (or past it) with end == -1 is not an
+// error — the returned reader yields zero bytes and EOF. Other
+// negative values (start < 0, end < -1, or end < start with end >= 0)
+// are rejected with [ErrInvalidRange].
 func BytesRange(start, end int64) GetOption {
 	return func(options *GetOptions) {
 		options.start = start

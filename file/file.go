@@ -74,6 +74,15 @@ func bytesRangeReadCloser(f *os.File, start, end int64) io.ReadCloser {
 	}
 }
 
+// seekToEnd positions f at EOF so subsequent Read calls return
+// (0, io.EOF). Used for out-of-range reads so the caller can return
+// f itself as a zero-byte ReadCloser — simpler than wrapping in a
+// separate empty-reader type, and avoids leaking f via io.NopCloser.
+func seekToEnd(f *os.File) error {
+	_, err := f.Seek(0, io.SeekEnd)
+	return err
+}
+
 type Bucket struct {
 	root string
 }
@@ -192,6 +201,16 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 	if start, end, ok := getOptions.BytesRange(); ok {
 		if err := storage.ValidObjectRange(key, start, end); err != nil {
 			return nil, storage.ObjectInfo{}, err
+		}
+		if end < 0 {
+			end = object.Size - 1
+		}
+		if start >= object.Size {
+			if err := seekToEnd(f); err != nil {
+				return nil, storage.ObjectInfo{}, err
+			}
+			closeFile = false
+			return f, object, nil
 		}
 		if _, err := f.Seek(start, io.SeekCurrent); err != nil {
 			return nil, storage.ObjectInfo{}, err

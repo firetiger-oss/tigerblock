@@ -173,8 +173,12 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		if err := storage.ValidObjectRange(key, start, end); err != nil {
 			return nil, storage.ObjectInfo{}, err
 		}
-		i := min(int64(len(content)), start)
-		j := min(int64(len(content)), end+1)
+		size := int64(len(content))
+		if end < 0 {
+			end = size - 1
+		}
+		i := min(size, start)
+		j := min(size, end+1)
 		content = content[i:j]
 	}
 

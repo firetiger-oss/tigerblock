@@ -25,6 +25,23 @@ func (c *TTL[K, V]) Drop(ks ...K) {
 	c.lru().Drop(ks...)
 }
 
+// Peek returns a cached entry without triggering a load. ok is true
+// only when a non-expired entry is already present (inflight entries
+// and expired entries are treated as misses so the caller can decide
+// whether to block on a refresh).
+func (c *TTL[K, V]) Peek(key K, now time.Time) (v V, ok bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	entry, found := c.cache.Lookup(key)
+	if !found {
+		return v, false
+	}
+	if !entry.expire.IsZero() && now.After(entry.expire) {
+		return v, false
+	}
+	return entry.value, true
+}
+
 func (c *TTL[K, V]) Load(key K, now time.Time, fetch func() (int64, V, time.Time, error)) (value V, expire time.Time, err error) {
 	return c.LoadCloneKey(key, now, passthrough[K], fetch)
 }

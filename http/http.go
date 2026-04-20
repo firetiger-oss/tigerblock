@@ -124,6 +124,27 @@ func parseContentRange(header http.Header) (first, last, total int64, err error)
 	return first, last, total, nil
 }
 
+// parseContentRangeTotal extracts the total object size from a
+// Content-Range header, supporting both the satisfied form
+// (bytes START-END/TOTAL) and the unsatisfied form (bytes */TOTAL)
+// returned with 416 responses. Returns -1 if the total cannot be
+// determined.
+func parseContentRangeTotal(header http.Header) int64 {
+	contentRange := header.Get("Content-Range")
+	if contentRange == "" {
+		return -1
+	}
+	_, total, ok := strings.Cut(contentRange, "/")
+	if !ok {
+		return -1
+	}
+	size, err := strconv.ParseInt(total, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return size
+}
+
 func parseLastModified(header http.Header) (time.Time, error) {
 	lastModified := header.Get("Last-Modified")
 	if lastModified == "" {

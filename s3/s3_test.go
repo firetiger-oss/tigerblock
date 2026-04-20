@@ -2,17 +2,83 @@ package s3_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/firetiger-oss/storage"
 	storages3 "github.com/firetiger-oss/storage/s3"
 	"github.com/firetiger-oss/storage/s3/fakes3"
 	storagetest "github.com/firetiger-oss/storage/test"
 )
+
+// TestS3GetObjectTranslates416 verifies that a 416 Range Not Satisfiable
+// response (returned by S3 when the requested start is past the end of the
+// object) is translated into an empty reader with the object size parsed
+// from the Content-Range response header. This removes the need for a
+// preliminary HEAD request by downstream callers doing tail reads.
+func TestS3GetObjectTranslates416(t *testing.T) {
+	const size = int64(100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadDefaultConfig(t.Context(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+		config.WithHTTPClient(awshttp.NewBuildableClient()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(u.String())
+		o.UsePathStyle = true
+	})
+	bucket := storages3.NewBucket(client, "test-bucket")
+
+	r, info, err := bucket.GetObject(t.Context(), "test-key", storage.BytesRange(size, -1))
+	if err != nil {
+		var respErr *smithyhttp.ResponseError
+		if errors.As(err, &respErr) {
+			t.Fatalf("expected empty reader + nil error, got HTTP %d: %v", respErr.HTTPStatusCode(), err)
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer r.Close()
+	if info.Size != size {
+		t.Errorf("ObjectInfo.Size = %d, want %d", info.Size, size)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+	if len(b) != 0 {
+		t.Errorf("expected empty body, got %q", b)
+	}
+}
 
 func TestS3(t *testing.T) {
 	storagetest.TestStorage(t, func(*testing.T) (storage.Bucket, error) {
@@ -38,13 +104,8 @@ func (m *mockRangeClient) GetObject(ctx context.Context, params *s3.GetObjectInp
 }
 
 // TestS3RangeHeaderFormat verifies that the S3 client correctly formats
-// Range headers for closed ranges (bytes=0-100).
-//
-// Note: Open-ended ranges (end=-1) are validated and rejected by GetObject before
-// reaching newGetObjectInput. The open-ended range fix (producing "bytes=N-" instead
-// of "bytes=N--1") is tested via the HTTP storage tests which cover the same pattern.
-// The HTTP server's presign path passes end=-1 through to the bucket without validation,
-// and both HTTP and S3 bucket implementations use the same fix pattern.
+// Range headers for both closed ranges (bytes=N-M) and open-ended ranges
+// (bytes=N-) used for tail reads.
 func TestS3RangeHeaderFormat(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -69,6 +130,18 @@ func TestS3RangeHeaderFormat(t *testing.T) {
 			start:         42,
 			end:           42,
 			expectedRange: "bytes=42-42",
+		},
+		{
+			name:          "open-ended range from start",
+			start:         0,
+			end:           -1,
+			expectedRange: "bytes=0-",
+		},
+		{
+			name:          "open-ended range from offset",
+			start:         5,
+			end:           -1,
+			expectedRange: "bytes=5-",
 		},
 	}
 

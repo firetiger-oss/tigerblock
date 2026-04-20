@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/firetiger-oss/storage"
+	storagefile "github.com/firetiger-oss/storage/file"
 	storagehttp "github.com/firetiger-oss/storage/http"
 	"github.com/firetiger-oss/storage/memory"
 	s3storage "github.com/firetiger-oss/storage/s3"
@@ -293,7 +295,8 @@ func TestHTTPStorageRateLimiting(t *testing.T) {
 }
 
 // TestHTTPStorageRangeHeaderFormat verifies that the HTTP client correctly formats
-// Range headers for closed ranges (bytes=0-100).
+// Range headers for both closed ranges (bytes=N-M) and open-ended ranges
+// (bytes=N-) used for tail reads.
 func TestHTTPStorageRangeHeaderFormat(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -319,6 +322,18 @@ func TestHTTPStorageRangeHeaderFormat(t *testing.T) {
 			end:           42,
 			expectedRange: "bytes=42-42",
 		},
+		{
+			name:          "open-ended range from start",
+			start:         0,
+			end:           -1,
+			expectedRange: "bytes=0-",
+		},
+		{
+			name:          "open-ended range from offset",
+			start:         5,
+			end:           -1,
+			expectedRange: "bytes=5-",
+		},
 	}
 
 	for _, tc := range tests {
@@ -342,6 +357,199 @@ func TestHTTPStorageRangeHeaderFormat(t *testing.T) {
 				t.Errorf("expected Range header %q, got %q", tc.expectedRange, capturedRange)
 			}
 		})
+	}
+}
+
+// TestHTTPStorageTranslates416 verifies that a 416 Range Not Satisfiable
+// response (returned when the requested start is past the end of the
+// object) is translated into an empty reader with the object size parsed
+// from the Content-Range response header. This removes the need for a
+// preliminary HEAD request by downstream callers doing tail reads.
+func TestHTTPStorageTranslates416(t *testing.T) {
+	const size = int64(100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+	}))
+	t.Cleanup(server.Close)
+
+	bucket := storagehttp.NewBucket(server.URL)
+	r, info, err := bucket.GetObject(t.Context(), "test-key", storage.BytesRange(size, -1))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer r.Close()
+	if info.Size != size {
+		t.Errorf("ObjectInfo.Size = %d, want %d", info.Size, size)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("unexpected read error: %v", err)
+	}
+	if len(b) != 0 {
+		t.Errorf("expected empty body, got %q", b)
+	}
+}
+
+// TestHTTPServerReturns416ForStartPastEnd verifies that when a client
+// requests a range whose start is past the end of the object, the HTTP
+// server responds with 416 and a "bytes */size" Content-Range header
+// (matching real S3) so the client can translate it into an empty reader.
+func TestHTTPServerReturns416ForStartPastEnd(t *testing.T) {
+	mem := new(memory.Bucket)
+	if _, err := mem.PutObject(t.Context(), "obj", strings.NewReader("abcdefghij")); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(storagehttp.BucketHandler(mem))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/obj", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=100-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("status = %d, want 416", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Range"); got != "bytes */10" {
+		t.Errorf("Content-Range = %q, want %q", got, "bytes */10")
+	}
+}
+
+// TestHTTPServerServeLocalFileOpenEndedRange exercises the
+// file-presign-redirect path that serves local file:// objects
+// directly. It must honour an open-ended Range (bytes=N-) by
+// streaming to EOF, not negative-byte-range nonsense.
+func TestHTTPServerServeLocalFileOpenEndedRange(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("abcdefghij")
+	if err := os.WriteFile(dir+"/k", body, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fileBucket := storagefile.NewBucket(dir)
+	// Adapt via a bucket that always returns ErrPresignRedirect from
+	// GetObject, forcing the server into the serveLocalFile path with
+	// a file:// presigned URL.
+	redirect := &presignFileBucket{Bucket: fileBucket, presignPath: dir + "/k"}
+	server := httptest.NewServer(storagehttp.BucketHandler(redirect))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=5-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := body[5:]; !bytes.Equal(got, want) {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestHTTPServerServeLocalFile416IncludesContentRange verifies the
+// file:// presign-redirect 416 path includes the total size via
+// "bytes */size" so storage/http.Bucket's 416 translation can
+// populate ObjectInfo.Size without a HEAD.
+func TestHTTPServerServeLocalFile416IncludesContentRange(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/k", []byte("abcdefghij"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	redirect := &presignFileBucket{Bucket: storagefile.NewBucket(dir), presignPath: dir + "/k"}
+	server := httptest.NewServer(storagehttp.BucketHandler(redirect))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=50-") // past EOF
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("status = %d, want 416", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Range"); got != "bytes */10" {
+		t.Errorf("Content-Range = %q, want %q", got, "bytes */10")
+	}
+}
+
+type presignFileBucket struct {
+	storage.Bucket
+	presignPath string
+}
+
+func (b *presignFileBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	return nil, storage.ObjectInfo{}, storage.ErrPresignRedirect
+}
+
+func (b *presignFileBucket) PresignGetObject(ctx context.Context, key string, expiration time.Duration, options ...storage.GetOption) (string, error) {
+	return "file://" + b.presignPath, nil
+}
+
+// TestHTTPServerPreservesStoredGzipRange verifies that a backend which
+// stores a gzipped body and reports Content-Encoding: gzip with a
+// correct Size (e.g. memory, file, s3) still gets 206 + Content-Length
+// + Content-Range for ranged requests. Backends that don't transcode
+// must not be special-cased away from the normal response path.
+func TestHTTPServerPreservesStoredGzipRange(t *testing.T) {
+	mem := new(memory.Bucket)
+	// Store some bytes with Content-Encoding: gzip — memory does not
+	// transcode, so ObjectInfo.Size matches the stored length.
+	body := strings.Repeat("x", 500)
+	if _, err := mem.PutObject(t.Context(), "k", strings.NewReader(body), storage.ContentEncoding("gzip")); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(storagehttp.BucketHandler(mem))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=0-99")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206 for a valid range on a stored gzip object", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Range"); got != "bytes 0-99/500" {
+		t.Errorf("Content-Range = %q, want %q", got, "bytes 0-99/500")
+	}
+	if got := resp.Header.Get("Content-Length"); got != "100" {
+		t.Errorf("Content-Length = %q, want %q", got, "100")
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 100 {
+		t.Fatalf("body length = %d, want 100", len(got))
 	}
 }
 

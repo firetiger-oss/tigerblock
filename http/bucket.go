@@ -264,6 +264,12 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 	switch res.StatusCode {
 	case http.StatusOK:
 	case http.StatusPartialContent:
+	case http.StatusRequestedRangeNotSatisfiable:
+		if _, _, hasRange := getOptions.BytesRange(); hasRange {
+			info := storage.ObjectInfo{Size: parseContentRangeTotal(res.Header)}
+			return io.NopCloser(bytes.NewReader(nil)), info, nil
+		}
+		return nil, storage.ObjectInfo{}, makeIcebergError(req, res, nil)
 	default:
 		return nil, storage.ObjectInfo{}, makeIcebergError(req, res, nil)
 	}

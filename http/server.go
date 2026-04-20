@@ -172,22 +172,32 @@ type bytesRange struct {
 
 func (r *bytesRange) ContentLength(size int64) int64 {
 	if r.start < 0 {
+		// Suffix range: bytes=-N. Clamp to available bytes.
+		if -r.start > size {
+			return size
+		}
 		return -r.start
 	}
-	if r.end >= 0 {
-		return (r.end + 1) - r.start
+	effEnd := r.end
+	if effEnd < 0 || effEnd >= size {
+		effEnd = size - 1
 	}
-	return size - r.start
+	return (effEnd + 1) - r.start
 }
 
 func (r *bytesRange) ContentRange(size int64) string {
 	if r.start < 0 {
-		return fmt.Sprintf("bytes %d-%d/%d", size+r.start, size-1, size)
+		suffix := -r.start
+		if suffix > size {
+			suffix = size
+		}
+		return fmt.Sprintf("bytes %d-%d/%d", size-suffix, size-1, size)
 	}
-	if r.end >= 0 {
-		return fmt.Sprintf("bytes %d-%d/%d", r.start, r.end, size)
+	effEnd := r.end
+	if effEnd < 0 || effEnd >= size {
+		effEnd = size - 1
 	}
-	return fmt.Sprintf("bytes %d-%d/%d", r.start, size-1, size)
+	return fmt.Sprintf("bytes %d-%d/%d", r.start, effEnd, size)
 }
 
 func parseBytesRange(rangeHeader string) (*bytesRange, error) {
@@ -341,15 +351,28 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		}
 		defer reader.Close()
 
-		header := w.Header()
-		setObject(header, object)
-
 		if httpRange != nil {
+			if httpRange.ContentLength(object.Size) <= 0 {
+				// Start past end of object: mirror real S3 with 416 +
+				// "bytes */size" so clients can recover the total
+				// size without a HEAD.
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", object.Size))
+				Error(w, "InvalidRange", "The requested range is not satisfiable", makeKey(r), http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			header := w.Header()
+			setObject(header, object)
+			// setObject set Content-Length from object.Size; replace
+			// with the range's slice length.
 			setContentLength(header, httpRange.ContentLength(object.Size))
 			setContentRange(header, httpRange.ContentRange(object.Size))
 			w.WriteHeader(http.StatusPartialContent)
+			io.Copy(w, reader)
+			return
 		}
 
+		header := w.Header()
+		setObject(header, object)
 		io.Copy(w, reader)
 	}
 }
@@ -696,10 +719,16 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 
 	if httpRange != nil {
 		start, end := httpRange.start, httpRange.end
-		if end == 0 || end > size {
-			end = size
+		// end == -1 means "to end of file"; any end past the file
+		// clamps to size-1 so the inclusive range stays valid.
+		if end < 0 || end >= size {
+			end = size - 1
 		}
 		if start >= size {
+			// Mirror real S3: include Content-Range so clients (incl.
+			// storage/http.Bucket) can recover the total size from a
+			// past-EOF tail read without an extra HEAD.
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
 			Error(w, "InvalidRange", "The requested range is not satisfiable", filePath, http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
@@ -707,10 +736,11 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 			Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
 			return
 		}
-		setContentLength(header, end-start)
+		length := (end + 1) - start
+		setContentLength(header, length)
 		setContentRange(header, httpRange.ContentRange(size))
 		w.WriteHeader(http.StatusPartialContent)
-		io.CopyN(w, f, end-start)
+		io.CopyN(w, f, length)
 	} else {
 		setContentLength(header, size)
 		w.WriteHeader(http.StatusOK)

@@ -184,6 +184,20 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		if err := ValidObjectRange(key, getOptions.start, getOptions.end); err != nil {
 			return nil, ObjectInfo{}, err
 		}
+		// The page cache needs both endpoints to compute page indices,
+		// so it can't serve open-ended ranges. If the full object is
+		// already in the object cache we can slice it — preserves
+		// consistency with prior plain reads and avoids an extra
+		// backend round-trip. Otherwise delegate to the underlying
+		// bucket's native range support rather than downloading the
+		// whole object just to return a tail.
+		if getOptions.end < 0 {
+			if cached, ok := c.objects.Peek(key, time.Now()); ok {
+				object = cached
+				goto sliceCachedObject
+			}
+			return c.bucket.GetObject(ctx, key, options...)
+		}
 
 		ctx, cancel := context.WithCancel(ctx)
 		pages := make(chan cachedObject)
@@ -288,11 +302,20 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 			return 0, object, time.Time{}, err
 		}
 		defer reader.Close()
-		object.info = info
-		object.body = make([]byte, info.Size)
-		if _, err := io.ReadFull(reader, object.body); err != nil {
+		// Read the whole body rather than pre-allocating info.Size
+		// bytes — some backends (notably gs when serving
+		// gzip-transcoded objects) return an info.Size that
+		// understates the reader's actual byte length.
+		body, err := io.ReadAll(reader)
+		if err != nil {
 			return 0, object, time.Time{}, err
 		}
+		// Keep info.Size consistent with the cached body so callers
+		// that trust the returned metadata (e.g. http.BucketHandler
+		// computing Content-Length) see a coherent value.
+		info.Size = int64(len(body))
+		object.info = info
+		object.body = body
 		size := int64(0)
 		size += int64(len(key))
 		size += int64(len(object.body))
@@ -303,9 +326,14 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		return nil, ObjectInfo{}, err
 	}
 
+sliceCachedObject:
 	body := object.body
 	if getOptions.byteRange {
-		body = body[:min(getOptions.end+1, int64(len(body)))]
+		end := getOptions.end
+		if end < 0 {
+			end = int64(len(body)) - 1
+		}
+		body = body[:min(end+1, int64(len(body)))]
 		body = body[min(getOptions.start, int64(len(body))):]
 	}
 	return newCachedObjectBody(body), object.info, nil

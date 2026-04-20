@@ -1,12 +1,14 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
+	nethttp "net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -19,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/firetiger-oss/storage"
 	"github.com/firetiger-oss/storage/backoff"
 	"github.com/firetiger-oss/storage/cache"
@@ -180,6 +183,11 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 
 	out, err := b.client.GetObject(ctx, in)
 	if err != nil {
+		if _, _, hasRange := getOptions.BytesRange(); hasRange {
+			if info, ok := rangeNotSatisfiableResponse(err); ok {
+				return io.NopCloser(bytes.NewReader(nil)), info, nil
+			}
+		}
 		return nil, storage.ObjectInfo{}, makeIcebergError(err)
 	}
 
@@ -217,6 +225,30 @@ func parseObjectSizeFromContentRange(contentRange string) (int64, error) {
 		return -1, fmt.Errorf("invalid content range has malformed total size: %s: %w", contentRange, err)
 	}
 	return size, nil
+}
+
+// rangeNotSatisfiableResponse inspects an error returned by GetObject
+// and, if it corresponds to a 416 Range Not Satisfiable response,
+// returns the ObjectInfo synthesised from the Content-Range header.
+// The caller should return an empty reader with that ObjectInfo so
+// tail reads past end of object behave like reads of a zero-byte file.
+func rangeNotSatisfiableResponse(err error) (storage.ObjectInfo, bool) {
+	var respErr *smithyhttp.ResponseError
+	if !errors.As(err, &respErr) {
+		return storage.ObjectInfo{}, false
+	}
+	if respErr.HTTPStatusCode() != nethttp.StatusRequestedRangeNotSatisfiable {
+		return storage.ObjectInfo{}, false
+	}
+	info := storage.ObjectInfo{Size: -1}
+	if respErr.Response != nil {
+		if cr := respErr.Response.Header.Get("Content-Range"); cr != "" {
+			if size, perr := parseObjectSizeFromContentRange(cr); perr == nil {
+				info.Size = size
+			}
+		}
+	}
+	return info, true
 }
 
 func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, options ...storage.PutOption) (storage.ObjectInfo, error) {

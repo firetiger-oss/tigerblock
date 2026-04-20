@@ -84,9 +84,16 @@ func TestBytesRangeContentRange(t *testing.T) {
 	}{
 		{
 			name:    "valid range",
+			input:   "bytes=0-5",
+			size:    10,
+			want:    "bytes 0-5/10",
+			wantErr: false,
+		},
+		{
+			name:    "closed range past EOF is clamped",
 			input:   "bytes=0-10",
 			size:    10,
-			want:    "bytes 0-10/10",
+			want:    "bytes 0-9/10",
 			wantErr: false,
 		},
 		{
@@ -99,6 +106,13 @@ func TestBytesRangeContentRange(t *testing.T) {
 		{
 			name:    "negative start",
 			input:   "bytes=-10",
+			size:    10,
+			want:    "bytes 0-9/10",
+			wantErr: false,
+		},
+		{
+			name:    "suffix larger than object",
+			input:   "bytes=-99",
 			size:    10,
 			want:    "bytes 0-9/10",
 			wantErr: false,
