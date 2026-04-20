@@ -165,7 +165,18 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		return nil, storage.ObjectInfo{}, err
 	}
 
-	obj := b.client.Bucket(b.bucket).Object(key)
+	// ReadCompressed(true) opts out of GCS's decompressive transcoding.
+	// Without it, objects uploaded with Content-Encoding: gzip are
+	// silently decompressed on read: attrs.Size is the stored
+	// compressed length but the body the caller reads is longer, so
+	// range offsets and Content-Length/Content-Range arithmetic
+	// downstream (cache adapters, HTTP adapter) break. With it, GCS
+	// serves the stored bytes as-is with Content-Encoding: gzip on
+	// the wire, attrs.Size matches the body, and callers that want
+	// the decompressed content apply their own gzip.Reader — the
+	// same contract every other backend in this package already uses.
+	// https://cloud.google.com/storage/docs/transcoding
+	obj := b.client.Bucket(b.bucket).Object(key).ReadCompressed(true)
 	attrs, err := obj.Attrs(ctx)
 	if err != nil {
 		return nil, storage.ObjectInfo{}, makeIcebergError(err)
@@ -212,23 +223,6 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 		}
 	}
 
-	// https://cloud.google.com/storage/docs/transcoding
-	// When GCS transcodes a gzip-stored object on the fly, the gcloud
-	// client gets the whole decompressed body regardless of the Range
-	// header and exposes it via reader.Attrs.Decompressed. Seek into
-	// that stream by discarding `start` bytes — past-end reads surface
-	// as EOF and are flattened to an empty reader.
-	if hasRange && reader.Attrs.Decompressed {
-		if _, err := io.CopyN(io.Discard, reader, start); err != nil {
-			reader.Close()
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return io.NopCloser(strings.NewReader("")), object, nil
-			}
-			return nil, storage.ObjectInfo{}, err
-		}
-	}
-
-	object.ContentEncoding = reader.Attrs.ContentEncoding
 	return reader, object, nil
 }
 

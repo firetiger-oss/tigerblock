@@ -1,7 +1,6 @@
 package http
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/xml"
@@ -353,47 +352,22 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		defer reader.Close()
 
 		if httpRange != nil {
-			// Whether a range is satisfiable can't always be decided
-			// from object.Size alone: the gs backend serves
-			// gzip-transcoded objects whose on-the-wire length differs
-			// from the stored size it reports in ObjectInfo. Peek at
-			// the body — an empty reader means "past end" regardless
-			// of what Size says.
-			buf := bufio.NewReader(reader)
-			if _, err := buf.Peek(1); errors.Is(err, io.EOF) {
-				// Mirror real S3 with 416 + "bytes */size".
+			if httpRange.ContentLength(object.Size) <= 0 {
+				// Start past end of object: mirror real S3 with 416 +
+				// "bytes */size" so clients can recover the total
+				// size without a HEAD.
 				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", object.Size))
 				Error(w, "InvalidRange", "The requested range is not satisfiable", makeKey(r), http.StatusRequestedRangeNotSatisfiable)
-				return
-			} else if err != nil {
-				writeError(w, err)
 				return
 			}
 			header := w.Header()
 			setObject(header, object)
-			// setObject set Content-Length from object.Size, which
-			// isn't the slice length we're about to stream. Compute
-			// length/range from the caller's byteRange when the
-			// arithmetic against object.Size is coherent (the common
-			// case); for transcoded backends whose body extends past
-			// object.Size (start >= object.Size would produce a
-			// malformed header), drop Content-Length/Content-Range.
-			if n := httpRange.ContentLength(object.Size); n > 0 {
-				setContentLength(header, n)
-				setContentRange(header, httpRange.ContentRange(object.Size))
-			} else {
-				header.Del("Content-Length")
-			}
+			// setObject set Content-Length from object.Size; replace
+			// with the range's slice length.
+			setContentLength(header, httpRange.ContentLength(object.Size))
+			setContentRange(header, httpRange.ContentRange(object.Size))
 			w.WriteHeader(http.StatusPartialContent)
-			// Cap the copy by the caller's explicit end (if any) so
-			// closed ranges against size-lying backends return the
-			// requested slice rather than the whole decompressed
-			// tail. Open-ended ranges stream to EOF.
-			if httpRange.end >= 0 {
-				io.CopyN(w, buf, (httpRange.end+1)-httpRange.start)
-			} else {
-				io.Copy(w, buf)
-			}
+			io.Copy(w, reader)
 			return
 		}
 
