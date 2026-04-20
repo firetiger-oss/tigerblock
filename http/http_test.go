@@ -419,6 +419,83 @@ func TestHTTPServerReturns416ForStartPastEnd(t *testing.T) {
 	}
 }
 
+// TestHTTPServerTranscodedRangeNotRejected guards against using the
+// stored (compressed) ObjectInfo.Size for 416 detection when the
+// backend serves transcoded content. A GCS object with
+// Content-Encoding: gzip reports its compressed size in ObjectInfo,
+// but the reader the bucket returns is the decompressed body. A
+// client request whose start is past the compressed size can still
+// be a valid read — the server must not pre-emptively emit 416 based
+// on the compressed size.
+func TestHTTPServerTranscodedRangeNotRejected(t *testing.T) {
+	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
+	backend := &transcodedBucket{
+		info: storage.ObjectInfo{
+			Size:            60, // pretend stored (compressed) size
+			ContentEncoding: "gzip",
+			ContentType:     "text/plain",
+		},
+		body: body,
+	}
+
+	server := httptest.NewServer(storagehttp.BucketHandler(backend))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/transcoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Offset past the compressed size but within the decompressed body.
+	req.Header.Set("Range", "bytes=100-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("server returned 416 for a range whose backend reader is non-empty; should stream the body instead")
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatalf("expected non-empty body from transcoded backend, got %d bytes", len(got))
+	}
+}
+
+// transcodedBucket simulates a gs-style transcoded GET: ObjectInfo
+// reports the compressed size, the body is the decompressed content.
+type transcodedBucket struct {
+	storage.Bucket
+	info storage.ObjectInfo
+	body string
+}
+
+func (b *transcodedBucket) Location() string { return "mock://transcoded" }
+
+func (b *transcodedBucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	return b.info, nil
+}
+
+func (b *transcodedBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	getOptions := storage.NewGetOptions(options...)
+	body := b.body
+	if start, end, ok := getOptions.BytesRange(); ok {
+		_ = end
+		// Mimic gs behaviour: the reader carries a slice of the
+		// decompressed body starting at `start`, regardless of the
+		// stored compressed size.
+		if start >= int64(len(body)) {
+			body = ""
+		} else {
+			body = body[start:]
+		}
+	}
+	return io.NopCloser(strings.NewReader(body)), b.info, nil
+}
+
 // TestHTTPServerOpenEndedRangeFormat verifies that when the HTTP server receives
 // an open-ended Range request (bytes=N-) and forwards it via PresignGetObject,
 // the Range header is correctly formatted as "bytes=N-" instead of the invalid "bytes=N--1".

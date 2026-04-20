@@ -27,6 +27,69 @@ func TestGoogleCloudStorageBucket(t *testing.T) {
 	})
 }
 
+// TestGCSTailRangePastDecompressedEndTranscoded covers the other edge
+// of transcoded-range handling: an offset past the *decompressed* end
+// of a gzip-transcoded object must still return an empty reader and
+// nil error, matching the BytesRange(offset, -1) contract. Without
+// special handling, the io.CopyN(Discard, reader, start) that the gs
+// backend uses to seek into the transcoded stream would surface an
+// io.EOF and be returned to the caller as an error.
+func TestGCSTailRangePastDecompressedEndTranscoded(t *testing.T) {
+	server, googleClient, bucketName := newServerAndClient(t)
+	defer server.Stop()
+
+	decompressed := strings.Repeat("hello world! ", 100) // 1300 bytes
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte(decompressed)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compressed := buf.Bytes()
+
+	server.CreateObject(fakestorage.Object{
+		ObjectAttrs: fakestorage.ObjectAttrs{
+			BucketName:      bucketName,
+			Name:            "gzipped",
+			ContentEncoding: "gzip",
+			ContentType:     "text/plain",
+		},
+		Content: compressed,
+	})
+
+	gsClient, err := gsclient.NewGoogleCloudStorageClient(t.Context(), bucketName, gsclient.WithHTTPClient(server.HTTPClient()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := gs.NewBucket(googleClient, gsClient, bucketName)
+
+	cases := []struct {
+		name  string
+		start int64
+	}{
+		{name: "at end of decompressed", start: int64(len(decompressed))},
+		{name: "past end of decompressed", start: int64(len(decompressed)) + 500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _, err := bucket.GetObject(t.Context(), "gzipped", storage.BytesRange(tc.start, -1))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer r.Close()
+			b, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatalf("unexpected read error: %v", err)
+			}
+			if len(b) != 0 {
+				t.Fatalf("expected empty body, got %d bytes", len(b))
+			}
+		})
+	}
+}
+
 // TestGCSTailRangeAgainstTranscodedObject guards the case where a GCS
 // object is stored gzip-compressed (Content-Encoding: gzip) and served
 // decompressed on read. Object attributes report the compressed size,

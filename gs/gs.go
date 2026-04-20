@@ -221,6 +221,14 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 	if hasRange && reader.Attrs.Decompressed {
 		if _, err := io.CopyN(io.Discard, reader, start); err != nil {
 			reader.Close()
+			// CopyN returns io.EOF / io.ErrUnexpectedEOF when the
+			// decompressed stream is shorter than the caller's start
+			// offset — i.e. a tail read past the end of the object.
+			// Treat it the same as the non-transcoded past-end case:
+			// empty reader + nil error.
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return io.NopCloser(strings.NewReader("")), object, nil
+			}
 			return nil, storage.ObjectInfo{}, err
 		}
 	}

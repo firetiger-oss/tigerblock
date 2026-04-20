@@ -351,7 +351,15 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		}
 		defer reader.Close()
 
-		if httpRange != nil && httpRange.ContentLength(object.Size) <= 0 {
+		// GCS objects stored with Content-Encoding: gzip are served
+		// decompressed by the backend; ObjectInfo.Size carries the
+		// compressed stored size, not the byte length of the reader,
+		// so it cannot be used to pre-emptively detect unsatisfiable
+		// ranges, advertise Content-Length, or derive Content-Range.
+		// Fall through and stream whatever the backend yielded.
+		sizeKnown := object.ContentEncoding != "gzip"
+
+		if sizeKnown && httpRange != nil && httpRange.ContentLength(object.Size) <= 0 {
 			// Unsatisfiable range (start past end of object): mirror
 			// real S3 with a 416 + "bytes */size" Content-Range so the
 			// client can translate it back to an empty reader without
@@ -362,9 +370,13 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		}
 
 		header := w.Header()
-		setObject(header, object)
+		if sizeKnown {
+			setObject(header, object)
+		} else {
+			setObjectHeadersWithoutSize(header, object)
+		}
 
-		if httpRange != nil {
+		if httpRange != nil && sizeKnown {
 			setContentLength(header, httpRange.ContentLength(object.Size))
 			setContentRange(header, httpRange.ContentRange(object.Size))
 			w.WriteHeader(http.StatusPartialContent)
@@ -372,6 +384,19 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 
 		io.Copy(w, reader)
 	}
+}
+
+// setObjectHeadersWithoutSize mirrors setObject but omits the
+// Content-Length / X-Amz-Object-Size headers. Used when the backend
+// returns transcoded bytes whose length differs from the stored size
+// reported in ObjectInfo.
+func setObjectHeadersWithoutSize(header http.Header, object storage.ObjectInfo) {
+	setHeaderIfNotEmpty(header, "Cache-Control", object.CacheControl)
+	setHeaderIfNotEmpty(header, "Content-Type", object.ContentType)
+	setHeaderIfNotEmpty(header, "Content-Encoding", object.ContentEncoding)
+	setHeaderIfNotEmpty(header, "Etag", object.ETag)
+	setHeaderIfNotEmpty(header, "Last-Modified", formatTime(object.LastModified))
+	setObjectMetadata(header, object.Metadata)
 }
 
 func handlePUT(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *HandlerOptions) {
