@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/firetiger-oss/storage"
+	storagefile "github.com/firetiger-oss/storage/file"
 	storagehttp "github.com/firetiger-oss/storage/http"
 	"github.com/firetiger-oss/storage/memory"
 	s3storage "github.com/firetiger-oss/storage/s3"
@@ -454,6 +456,61 @@ func TestHTTPServerEmitsContentRangeForSizeLyingBackend(t *testing.T) {
 	if got := resp.Header.Get("Content-Range"); got == "" {
 		t.Errorf("Content-Range missing — clients can't recover Size from the 206 response")
 	}
+}
+
+// TestHTTPServerServeLocalFileOpenEndedRange exercises the
+// file-presign-redirect path that serves local file:// objects
+// directly. It must honour an open-ended Range (bytes=N-) by
+// streaming to EOF, not negative-byte-range nonsense.
+func TestHTTPServerServeLocalFileOpenEndedRange(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("abcdefghij")
+	if err := os.WriteFile(dir+"/k", body, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fileBucket := storagefile.NewBucket(dir)
+	// Adapt via a bucket that always returns ErrPresignRedirect from
+	// GetObject, forcing the server into the serveLocalFile path with
+	// a file:// presigned URL.
+	redirect := &presignFileBucket{Bucket: fileBucket, presignPath: dir + "/k"}
+	server := httptest.NewServer(storagehttp.BucketHandler(redirect))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=5-")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := body[5:]; !bytes.Equal(got, want) {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+type presignFileBucket struct {
+	storage.Bucket
+	presignPath string
+}
+
+func (b *presignFileBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	return nil, storage.ObjectInfo{}, storage.ErrPresignRedirect
+}
+
+func (b *presignFileBucket) PresignGetObject(ctx context.Context, key string, expiration time.Duration, options ...storage.GetOption) (string, error) {
+	return "file://" + b.presignPath, nil
 }
 
 // TestHTTPServerStreamsNonEmptyRangeEvenWhenSizeLooksWrong guards

@@ -735,8 +735,10 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 
 	if httpRange != nil {
 		start, end := httpRange.start, httpRange.end
-		if end == 0 || end > size {
-			end = size
+		// end == -1 means "to end of file"; any end past the file
+		// clamps to size-1 so the inclusive range stays valid.
+		if end < 0 || end >= size {
+			end = size - 1
 		}
 		if start >= size {
 			Error(w, "InvalidRange", "The requested range is not satisfiable", filePath, http.StatusRequestedRangeNotSatisfiable)
@@ -746,10 +748,11 @@ func serveLocalFile(w http.ResponseWriter, r *http.Request, filePath string, htt
 			Error(w, "InternalError", err.Error(), filePath, http.StatusInternalServerError)
 			return
 		}
-		setContentLength(header, end-start)
+		length := (end + 1) - start
+		setContentLength(header, length)
 		setContentRange(header, httpRange.ContentRange(size))
 		w.WriteHeader(http.StatusPartialContent)
-		io.CopyN(w, f, end-start)
+		io.CopyN(w, f, length)
 	} else {
 		setContentLength(header, size)
 		w.WriteHeader(http.StatusOK)
