@@ -218,6 +218,16 @@ func (b *Bucket) GetObject(ctx context.Context, key string, options ...storage.G
 	}
 
 	// https://cloud.google.com/storage/docs/transcoding
+	if reader.Attrs.Decompressed {
+		// The gcloud client served the object with
+		// Content-Encoding: gzip stripped and the body decompressed.
+		// attrs.Size is the stored compressed length, which no longer
+		// matches the body the caller will read — mark Size as
+		// unknown so downstream consumers (notably the HTTP adapter's
+		// ranged-response logic) know not to advertise a mismatched
+		// Content-Length / Content-Range.
+		object.Size = -1
+	}
 	if hasRange && reader.Attrs.Decompressed {
 		if _, err := io.CopyN(io.Discard, reader, start); err != nil {
 			reader.Close()

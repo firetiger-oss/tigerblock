@@ -351,13 +351,12 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 		}
 		defer reader.Close()
 
-		// GCS objects stored with Content-Encoding: gzip are served
-		// decompressed by the backend; ObjectInfo.Size carries the
-		// compressed stored size, not the byte length of the reader,
-		// so it cannot be used to pre-emptively detect unsatisfiable
-		// ranges, advertise Content-Length, or derive Content-Range.
-		// Fall through and stream whatever the backend yielded.
-		sizeKnown := object.ContentEncoding != "gzip"
+		// Backends like gs that serve transcoded content signal that
+		// ObjectInfo.Size does not match the reader's byte length by
+		// reporting Size < 0. In that case we can neither derive a
+		// 416 response, a Content-Length, nor a Content-Range —
+		// just stream whatever the backend returned.
+		sizeKnown := object.Size >= 0
 
 		if sizeKnown && httpRange != nil && httpRange.ContentLength(object.Size) <= 0 {
 			// Unsatisfiable range (start past end of object): mirror
