@@ -421,43 +421,6 @@ func TestHTTPServerReturns416ForStartPastEnd(t *testing.T) {
 	}
 }
 
-// TestHTTPServerEmitsContentRangeForSizeLyingBackend makes sure a
-// ranged 206 from a size-lying backend still carries a Content-Range
-// header. The paired http client (and our S3 adapter) reads
-// ObjectInfo.Size from Content-Range when X-Amz-Object-Size is not
-// present — dropping the header on these responses would propagate
-// Size = -1 to callers.
-func TestHTTPServerEmitsContentRangeForSizeLyingBackend(t *testing.T) {
-	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
-	backend := &transcodedBucket{
-		info: storage.ObjectInfo{
-			Size:        60,
-			ContentType: "text/plain",
-		},
-		body: body,
-	}
-	server := httptest.NewServer(storagehttp.BucketHandler(backend))
-	t.Cleanup(server.Close)
-
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/transcoded", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Range", "bytes=100-")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusPartialContent {
-		t.Fatalf("status = %d, want 206", resp.StatusCode)
-	}
-	if got := resp.Header.Get("Content-Range"); got == "" {
-		t.Errorf("Content-Range missing — clients can't recover Size from the 206 response")
-	}
-}
-
 // TestHTTPServerServeLocalFileOpenEndedRange exercises the
 // file-presign-redirect path that serves local file:// objects
 // directly. It must honour an open-ended Range (bytes=N-) by

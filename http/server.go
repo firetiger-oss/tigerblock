@@ -371,18 +371,21 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 			}
 			header := w.Header()
 			setObject(header, object)
-			// setObject set Content-Length to object.Size; replace it
-			// with the range's slice length so clients and proxies get
-			// a well-formed 206.
-			setContentLength(header, httpRange.ContentLength(object.Size))
-			setContentRange(header, httpRange.ContentRange(object.Size))
+			// setObject set Content-Length from object.Size, which
+			// isn't the slice length we're about to stream. Compute
+			// length/range from the caller's byteRange when the
+			// arithmetic against object.Size is coherent (the common
+			// case); for transcoded backends whose body extends past
+			// object.Size (start >= object.Size would produce a
+			// malformed header), drop Content-Length/Content-Range
+			// and let chunked transfer carry the body to EOF.
+			if n := httpRange.ContentLength(object.Size); n > 0 {
+				setContentLength(header, n)
+				setContentRange(header, httpRange.ContentRange(object.Size))
+			} else {
+				header.Del("Content-Length")
+			}
 			w.WriteHeader(http.StatusPartialContent)
-			// Known limitation: for backends whose streamed body
-			// length exceeds ObjectInfo.Size (gs gzip-transcoded
-			// objects), this response will be truncated to
-			// Size-start bytes. That matches the pre-existing
-			// behaviour for closed ranges in the same scenario and
-			// preserves RFC-compliant headers for the common case.
 			io.Copy(w, buf)
 			return
 		}
