@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,13 +31,14 @@ func isErrNoSpace(err error) bool {
 }
 
 type Cache struct {
-	tmpdir string
-	size   int64
-	log    *slog.Logger
-	init   bool
-	once   sync.Once
-	mutex  sync.Mutex
-	items  lru.LRU[string, struct{}]
+	tmpdir   string
+	size     int64
+	log      *slog.Logger
+	init     bool
+	once     sync.Once
+	mutex    sync.Mutex
+	items    lru.LRU[string, struct{}]
+	inFlight atomic.Int64
 }
 
 func NewCache(tmpdir string, size int64) *Cache {
@@ -207,6 +209,27 @@ func (c *Cache) evictForSpace(targetSize int64) int64 {
 	return freedBytes
 }
 
+// evictUntilFits evicts LRU entries until committed + in-flight bytes fit within c.size.
+// Call this before beginning a write of size bytes so that concurrent writers account for
+// each other's in-flight disk usage, preventing ENOSPC under high concurrency.
+func (c *Cache) evictUntilFits() {
+	var evictedPaths []string
+	defer func() {
+		for _, p := range evictedPaths {
+			os.Remove(p)
+		}
+	}()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	for c.items.Size+c.inFlight.Load() > c.size {
+		path, _, _, ok := c.items.Evict()
+		if !ok {
+			break
+		}
+		evictedPaths = append(evictedPaths, path)
+	}
+}
+
 type cachedBucket struct {
 	*Cache
 	bucket storage.Bucket
@@ -352,6 +375,12 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		return nil, storage.ObjectInfo{}, err
 	}
 
+	// Account for this write before touching disk so concurrent goroutines see
+	// each other's in-flight bytes and evict proactively, preventing ENOSPC.
+	b.inFlight.Add(info.Size)
+	defer b.inFlight.Add(-info.Size)
+	b.evictUntilFits()
+
 	dirPath := filepath.Dir(filePath)
 	if err = os.Mkdir(dirPath, 0755); err != nil {
 		if errors.Is(err, fs.ErrExist) {
@@ -382,8 +411,8 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		if closeFile {
 			f.Close()
 			os.Remove(f.Name())
-		} else {
-			os.Rename(f.Name(), filePath)
+		} else if err := os.Rename(f.Name(), filePath); err == nil {
+			b.insert(filePath, info.Size)
 		}
 	}()
 
@@ -415,7 +444,6 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 		body = bytesRangeReadCloser(f, start, end)
 	}
 
-	b.lookup(f.Name())
 	closeFile = false
 	return body, info, nil
 }
@@ -473,6 +501,14 @@ func (b *cachedBucket) PutObject(ctx context.Context, key string, value io.Reade
 				tmpFile = nil
 				goto putObject
 			}
+
+			// The temp file is now on disk. Register its size as in-flight so
+			// concurrent writers factor it into eviction pressure before inserting.
+			written, _ := tmpFile.Seek(0, io.SeekCurrent)
+			b.inFlight.Add(written)
+			defer b.inFlight.Add(-written)
+			b.evictUntilFits()
+
 			if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 				b.log.WarnContext(ctx, "cache: failed to seek", "key", key, "error", err)
 				// Can't recover - skip caching entirely
