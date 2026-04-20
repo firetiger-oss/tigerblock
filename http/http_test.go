@@ -419,6 +419,56 @@ func TestHTTPServerReturns416ForStartPastEnd(t *testing.T) {
 	}
 }
 
+// TestHTTPServerDoesNotTruncateTranscodedTailRange reproduces the
+// specific gs-transcoded-through-HTTP-server scenario where start is
+// smaller than ObjectInfo.Size (the compressed stored size) but the
+// actual body is much larger (decompressed). Pre-fix, the server
+// advertised Content-Length: Size-start and Go's http package cut the
+// response off there, truncating the decompressed tail.
+func TestHTTPServerDoesNotTruncateTranscodedTailRange(t *testing.T) {
+	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
+	backend := &transcodedBucket{
+		info: storage.ObjectInfo{
+			Size:        60, // compressed stored size
+			ContentType: "text/plain",
+		},
+		body: body,
+	}
+
+	server := httptest.NewServer(storagehttp.BucketHandler(backend))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/transcoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=10-") // start < compressed Size, body is much larger
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	expected := body[10:]
+	if len(got) != len(expected) {
+		t.Fatalf("body length = %d, want %d (truncated because Content-Length was computed from compressed size)", len(got), len(expected))
+	}
+	if string(got) != expected {
+		t.Errorf("body mismatch: got first 40 %q, want first 40 %q", head(string(got), 40), head(expected, 40))
+	}
+}
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // TestHTTPServerStreamsNonEmptyRangeEvenWhenSizeLooksWrong guards
 // against relying on ObjectInfo.Size alone for 416 detection. The gs
 // backend, when serving gzip-transcoded content, returns a body whose

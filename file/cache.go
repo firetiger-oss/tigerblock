@@ -428,11 +428,20 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 
 	body = io.ReadCloser(f)
 	if hasBytesRange {
-		effEnd := end
-		if effEnd < 0 {
-			effEnd = info.Size - 1
+		// info.Size can be smaller than the bytes we just wrote (the
+		// gs transcoded case: stored compressed length + decompressed
+		// body). Use the on-disk size as the authoritative clamp to
+		// avoid truncating tail reads.
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, info, err
 		}
-		if start >= info.Size {
+		fileSize := fi.Size()
+		effEnd := end
+		if effEnd < 0 || effEnd >= fileSize {
+			effEnd = fileSize - 1
+		}
+		if start >= fileSize {
 			body = emptyBodyClosing(f)
 		} else {
 			body = bytesRangeReadCloser(f, start, effEnd)

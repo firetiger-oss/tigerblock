@@ -371,20 +371,19 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 			}
 			header := w.Header()
 			setObject(header, object)
-			// When the size-based arithmetic agrees with the backend
-			// (the typical case: memory/file/s3/oras, plus
-			// non-transcoded gs), advertise Content-Length and
-			// Content-Range so the client can stream a well-formed
-			// 206. Otherwise (transcoded gs) the reader length
-			// diverges from object.Size — fall back to chunked
-			// transfer rather than emit headers that would be invalid
-			// per RFC 7233 (e.g. "bytes 100-59/60" or negative
-			// Content-Length).
+			// For a ranged 206 we cannot trust ObjectInfo.Size as an
+			// upper bound on what's about to be streamed (the gs
+			// backend serves transcoded bytes whose length doesn't
+			// match the stored size). Drop the Content-Length that
+			// setObject installed and let Go's http server send
+			// Transfer-Encoding: chunked — the body streams to EOF
+			// whatever its actual length. Content-Range is best-effort
+			// (it still derives from object.Size, so transcoded
+			// responses may carry a misleading range), but no
+			// truncation.
+			header.Del("Content-Length")
 			if n := httpRange.ContentLength(object.Size); n > 0 {
-				setContentLength(header, n)
 				setContentRange(header, httpRange.ContentRange(object.Size))
-			} else {
-				header.Del("Content-Length")
 			}
 			w.WriteHeader(http.StatusPartialContent)
 			io.Copy(w, buf)

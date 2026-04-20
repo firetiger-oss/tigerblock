@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"io"
 	"math"
 	"strings"
@@ -584,4 +585,74 @@ func TestCacheTailReadPastEndDoesNotLeakFDs(t *testing.T) {
 			t.Fatalf("iteration %d: unexpected close error: %v", i, err)
 		}
 	}
+}
+
+// TestCacheTailReadUsesCachedFileSizeNotInfoSize covers a GCS-style
+// transcoded object cached through file.NewCache: the bucket writes
+// the decompressed bytes to disk, but ObjectInfo.Size reports the
+// stored compressed length. The cache-miss path's range slicing must
+// clamp against the cached file's actual size, not info.Size —
+// otherwise tail reads are truncated to compressedSize - start bytes.
+func TestCacheTailReadUsesCachedFileSizeNotInfoSize(t *testing.T) {
+	// A fresh cache + ranged first GetObject exercises the cache-miss
+	// branch in getObjectFromBucket, which is where info.Size from the
+	// backend is used directly (rather than readObjectInfo's f.Stat()).
+	cacheDir := t.TempDir()
+	ctx := t.Context()
+
+	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
+	underlying := &sizeLyingBucket{
+		info: storage.ObjectInfo{
+			Size:         60, // pretend compressed
+			CacheControl: "max-age=3600",
+			ETag:         "\"etag\"",
+		},
+		body: body,
+	}
+	bucket := NewCache(cacheDir, math.MaxInt64).AdaptBucket(underlying)
+
+	// Cache-miss + open-ended tail read: must not be clamped to
+	// compressedSize.
+	r, _, err := bucket.GetObject(ctx, "k", storage.BytesRange(10, -1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := body[10:]
+	if len(got) != len(want) {
+		t.Fatalf("body length = %d, want %d (clamped to info.Size?)", len(got), len(want))
+	}
+}
+
+// sizeLyingBucket simulates a backend that returns an ObjectInfo.Size
+// smaller than the actual body length (the gs transcoded scenario).
+type sizeLyingBucket struct {
+	storage.Bucket
+	info storage.ObjectInfo
+	body string
+}
+
+func (b *sizeLyingBucket) Location() string { return "mock://lies" }
+
+func (b *sizeLyingBucket) Access(ctx context.Context) error { return nil }
+
+func (b *sizeLyingBucket) HeadObject(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	return b.info, nil
+}
+
+func (b *sizeLyingBucket) GetObject(ctx context.Context, key string, options ...storage.GetOption) (io.ReadCloser, storage.ObjectInfo, error) {
+	getOptions := storage.NewGetOptions(options...)
+	body := b.body
+	if start, _, ok := getOptions.BytesRange(); ok {
+		if start >= int64(len(body)) {
+			body = ""
+		} else {
+			body = body[start:]
+		}
+	}
+	return io.NopCloser(strings.NewReader(body)), b.info, nil
 }
