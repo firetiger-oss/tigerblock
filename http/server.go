@@ -377,8 +377,7 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 			// arithmetic against object.Size is coherent (the common
 			// case); for transcoded backends whose body extends past
 			// object.Size (start >= object.Size would produce a
-			// malformed header), drop Content-Length/Content-Range
-			// and let chunked transfer carry the body to EOF.
+			// malformed header), drop Content-Length/Content-Range.
 			if n := httpRange.ContentLength(object.Size); n > 0 {
 				setContentLength(header, n)
 				setContentRange(header, httpRange.ContentRange(object.Size))
@@ -386,7 +385,15 @@ func handleGET(w http.ResponseWriter, r *http.Request, b storage.Bucket, h *Hand
 				header.Del("Content-Length")
 			}
 			w.WriteHeader(http.StatusPartialContent)
-			io.Copy(w, buf)
+			// Cap the copy by the caller's explicit end (if any) so
+			// closed ranges against size-lying backends return the
+			// requested slice rather than the whole decompressed
+			// tail. Open-ended ranges stream to EOF.
+			if httpRange.end >= 0 {
+				io.CopyN(w, buf, (httpRange.end+1)-httpRange.start)
+			} else {
+				io.Copy(w, buf)
+			}
 			return
 		}
 

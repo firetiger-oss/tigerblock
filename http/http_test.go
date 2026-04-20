@@ -508,6 +508,45 @@ func (b *presignFileBucket) PresignGetObject(ctx context.Context, key string, ex
 	return "file://" + b.presignPath, nil
 }
 
+// TestHTTPServerClosedRangeBoundedAgainstSizeLyingBackend verifies
+// that a closed range request against a backend whose body exceeds
+// ObjectInfo.Size stops at the caller's explicit end, rather than
+// streaming the whole decompressed tail when the size-based
+// arithmetic goes degenerate.
+func TestHTTPServerClosedRangeBoundedAgainstSizeLyingBackend(t *testing.T) {
+	body := strings.Repeat("decompressed body ", 100) // 1800 bytes
+	backend := &transcodedBucket{
+		info: storage.ObjectInfo{
+			Size:        60,
+			ContentType: "text/plain",
+		},
+		body: body,
+	}
+	server := httptest.NewServer(storagehttp.BucketHandler(backend))
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/transcoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closed range whose start is past the reported size but inside
+	// the actual body.
+	req.Header.Set("Range", "bytes=100-199")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 100; len(got) != want {
+		t.Errorf("body length = %d, want %d (closed range must be capped at end-start+1)", len(got), want)
+	}
+}
+
 // TestHTTPServerStreamsNonEmptyRangeEvenWhenSizeLooksWrong guards
 // against relying on ObjectInfo.Size alone for 416 detection. The gs
 // backend, when serving gzip-transcoded content, returns a body whose
