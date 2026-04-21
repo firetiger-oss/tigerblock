@@ -280,7 +280,7 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	// 2. the client was configured to use path-style URLs
 	// 3. the value was a stream and we could not determine its length
 	//
-	// When using path-style, we disable mutli-part uploads because we are
+	// When using path-style, we disable multi-part uploads because we are
 	// likely to be talking to a server that is not actually S3, and does
 	// not support it. However, the S3 client will try to checksum the object
 	// body, which is going to fail due to not being able to seek through the

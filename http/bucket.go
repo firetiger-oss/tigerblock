@@ -123,8 +123,8 @@ func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Re
 	if body != nil {
 		// Wrap the request body because the http.RoundTripper contract says
 		// that the body might be closed concurrently after RoundTrip returns.
-		// This would cause the body argument ot be used concurrently after
-		// returning from methods like PutObject, wich would result in race
+		// This would cause the body argument to be used concurrently after
+		// returning from methods like PutObject, which would result in race
 		// conditions. The bodyReadCloser type ensures that when the body is
 		// closed, the underlying io.Reader is released and will not be used
 		// anymore by the RoundTrip method, all of this is done with proper

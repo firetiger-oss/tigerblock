@@ -32,7 +32,7 @@ func CachePageSize(size int64) CacheOption {
 	return func(cache *Cache) { cache.pageSize = size }
 }
 
-// ObjectCacheSize sets the maximum size of the cache ofr full objects.
+// ObjectCacheSize sets the maximum size of the cache for full objects.
 func ObjectCacheSize(size int64) CacheOption {
 	return func(cache *Cache) { cache.objects.Limit = size }
 }
@@ -411,7 +411,7 @@ func newCachedObjectBody(data []byte) *cachedObjectBody {
 }
 
 // sizeOfObjectInfo returns an estimation of the size of the given ObjectInfo
-// in bytes. Ths result does not need to be exactly accurate, for example, we
+// in bytes. This result does not need to be exactly accurate, for example, we
 // don't account for the size of the ObjectInfo struct itself, nor the metadata
 // map's overhead.
 func sizeOfObjectInfo(info ObjectInfo) (size int64) {
