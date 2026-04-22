@@ -47,6 +47,15 @@ func (s BearerScheme[C]) Inject(req *http.Request, credential C) {
 	req.Header.Set("Authorization", "Bearer "+credential.Token())
 }
 
+// Challenge returns a Bearer WWW-Authenticate challenge with realm defaulted
+// to the request's Host.
+func (s BearerScheme[C]) Challenge(req *http.Request) Challenge {
+	return Challenge{
+		Scheme: "Bearer",
+		Params: map[string]string{"realm": req.Host},
+	}
+}
+
 // NewBearerAuthenticator returns an Authenticator that uses HTTP Bearer Authentication.
 // C must implement BearerCredential and be loadable via the provided Loader.
 // Uses tokenID as the credential identifier to load the expected token.

@@ -16,6 +16,9 @@ import (
 // Scheme defines an HTTP authentication scheme (Bearer, Basic, etc.).
 // Implementations handle extracting credentials from requests and injecting
 // them into outbound requests.
+//
+// Schemes may optionally implement Challenger to contribute a
+// WWW-Authenticate challenge on 401 responses; see NewAuthenticator.
 type Scheme[C any] interface {
 	// Extract extracts the identifier and secret from an incoming request.
 	// Returns (identifier, secret, true) if auth header present and valid format.
@@ -32,28 +35,50 @@ type Scheme[C any] interface {
 // NewAuthenticator returns an Authenticator using the given scheme.
 // C must be loadable via the provided Loader.
 // On success, injects credential into context via ContextWithCredential[C].
+//
+// If the scheme also implements Challenger, the returned Authenticator
+// implements Challenger by delegating to the scheme; otherwise the
+// Authenticator contributes no WWW-Authenticate challenge.
 func NewAuthenticator[C any, S Scheme[C]](loader Loader[C], scheme S) Authenticator {
-	return AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-		identifier, s, ok := scheme.Extract(req)
-		if !ok {
-			return nil, ErrNotFound
-		}
+	return &schemeAuthenticator[C, S]{loader: loader, scheme: scheme}
+}
 
-		credential, err := loader.Load(ctx, identifier)
-		if err != nil {
-			if errors.Is(err, secret.ErrNotFound) {
-				return nil, ErrUnauthorized
-			}
-			return nil, err
-		}
+type schemeAuthenticator[C any, S Scheme[C]] struct {
+	loader Loader[C]
+	scheme S
+}
 
-		if !scheme.Verify(credential, s) {
+func (a *schemeAuthenticator[C, S]) Authenticate(ctx context.Context, req *http.Request) (context.Context, error) {
+	identifier, s, ok := a.scheme.Extract(req)
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	credential, err := a.loader.Load(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, secret.ErrNotFound) {
 			return nil, ErrUnauthorized
 		}
+		return nil, err
+	}
 
-		domain, _ := publicsuffix.EffectiveTLDPlusOne(hostname(req))
-		return ContextWithCredential(ctx, domain, credential), nil
-	})
+	if !a.scheme.Verify(credential, s) {
+		return nil, ErrUnauthorized
+	}
+
+	domain, _ := publicsuffix.EffectiveTLDPlusOne(hostname(req))
+	return ContextWithCredential(ctx, domain, credential), nil
+}
+
+// Challenge implements Challenger by delegating to the scheme's own
+// Challenge method if the scheme implements Challenger. Otherwise returns
+// the zero Challenge so the authenticator contributes nothing to the
+// WWW-Authenticate header.
+func (a *schemeAuthenticator[C, S]) Challenge(req *http.Request) Challenge {
+	if c, ok := any(a.scheme).(Challenger); ok {
+		return c.Challenge(req)
+	}
+	return Challenge{}
 }
 
 // NewAuthForwarder returns an http.RoundTripper that injects credentials
