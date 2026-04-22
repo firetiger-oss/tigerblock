@@ -27,33 +27,48 @@ type Scheme[C any] interface {
 
 	// Inject adds authentication to an outbound request.
 	Inject(req *http.Request, credential C)
+
+	// Challenge returns the WWW-Authenticate challenge for this scheme,
+	// used when a request is rejected with 401.
+	Challenge(req *http.Request) Challenge
 }
 
 // NewAuthenticator returns an Authenticator using the given scheme.
 // C must be loadable via the provided Loader.
 // On success, injects credential into context via ContextWithCredential[C].
 func NewAuthenticator[C any, S Scheme[C]](loader Loader[C], scheme S) Authenticator {
-	return AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
-		identifier, s, ok := scheme.Extract(req)
-		if !ok {
-			return nil, ErrNotFound
-		}
+	return &schemeAuthenticator[C, S]{loader: loader, scheme: scheme}
+}
 
-		credential, err := loader.Load(ctx, identifier)
-		if err != nil {
-			if errors.Is(err, secret.ErrNotFound) {
-				return nil, ErrUnauthorized
-			}
-			return nil, err
-		}
+type schemeAuthenticator[C any, S Scheme[C]] struct {
+	loader Loader[C]
+	scheme S
+}
 
-		if !scheme.Verify(credential, s) {
+func (a *schemeAuthenticator[C, S]) Authenticate(ctx context.Context, req *http.Request) (context.Context, error) {
+	identifier, s, ok := a.scheme.Extract(req)
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	credential, err := a.loader.Load(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, secret.ErrNotFound) {
 			return nil, ErrUnauthorized
 		}
+		return nil, err
+	}
 
-		domain, _ := publicsuffix.EffectiveTLDPlusOne(hostname(req))
-		return ContextWithCredential(ctx, domain, credential), nil
-	})
+	if !a.scheme.Verify(credential, s) {
+		return nil, ErrUnauthorized
+	}
+
+	domain, _ := publicsuffix.EffectiveTLDPlusOne(hostname(req))
+	return ContextWithCredential(ctx, domain, credential), nil
+}
+
+func (a *schemeAuthenticator[C, S]) Challenge(req *http.Request) Challenge {
+	return a.scheme.Challenge(req)
 }
 
 // NewAuthForwarder returns an http.RoundTripper that injects credentials

@@ -860,3 +860,29 @@ func TestBasicAuthEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+func TestNewBasicAuthenticatorChallenge(t *testing.T) {
+	store := secret.ProviderFunc(func(context.Context, string, ...secret.GetOption) (secret.Value, string, error) {
+		return nil, "", secret.ErrNotFound
+	})
+	auth := NewBasicAuthenticator(NewLoader[testCredential](store))
+
+	handler := NewHandler(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Error("next handler should not be called")
+		}),
+		auth,
+	)
+
+	req := httptest.NewRequest("GET", "http://api.example.com/resource", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	want := `Basic realm="api.example.com"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+	}
+}

@@ -650,3 +650,29 @@ func TestBearerAuthEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+func TestNewBearerAuthenticatorChallenge(t *testing.T) {
+	provider := secret.ProviderFunc(func(context.Context, string, ...secret.GetOption) (secret.Value, string, error) {
+		return nil, "", secret.ErrNotFound
+	})
+	auth := NewBearerAuthenticator(NewLoader[testBearerCredential](provider), "api-token")
+
+	handler := NewHandler(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Error("next handler should not be called")
+		}),
+		auth,
+	)
+
+	req := httptest.NewRequest("GET", "http://api.example.com/resource", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	want := `Bearer realm="api.example.com"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+	}
+}

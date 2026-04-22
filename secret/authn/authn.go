@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/firetiger-oss/storage/secret"
@@ -27,6 +29,11 @@ var ErrNotFound = errors.New("credentials not found")
 // This design allows composing multiple authentication schemes.
 type Authenticator interface {
 	Authenticate(ctx context.Context, req *http.Request) (context.Context, error)
+
+	// Challenge returns the WWW-Authenticate challenge this authenticator
+	// contributes when a request is rejected with 401. Return the zero
+	// value to contribute no challenge (e.g. signed-URL authentication).
+	Challenge(req *http.Request) Challenge
 }
 
 // AuthenticatorFunc is a function adapter for Authenticator.
@@ -35,6 +42,63 @@ type AuthenticatorFunc func(ctx context.Context, req *http.Request) (context.Con
 // Authenticate implements Authenticator.
 func (f AuthenticatorFunc) Authenticate(ctx context.Context, req *http.Request) (context.Context, error) {
 	return f(ctx, req)
+}
+
+// Challenge implements Authenticator by contributing no challenge.
+// Callers that need to contribute a WWW-Authenticate challenge should build
+// an authenticator through NewAuthenticator with a Scheme implementation.
+func (f AuthenticatorFunc) Challenge(*http.Request) Challenge { return Challenge{} }
+
+// Challenge is a single WWW-Authenticate challenge entry (RFC 7235).
+//
+// Only auth-scheme plus quoted-string auth-params is supported; token68
+// (Negotiate/NTLM) and token-valued params (e.g. Digest's algorithm, stale)
+// are out of scope.
+type Challenge struct {
+	// Scheme is the authentication scheme, e.g. "Basic" or "Bearer".
+	// RFC 7235 treats schemes case-insensitively; the value is transmitted
+	// as-is.
+	Scheme string
+
+	// Params are the auth-params emitted as quoted-strings, e.g.
+	// {"realm": "example.com", "scope": "read"}. Keys are sorted
+	// alphabetically on serialization.
+	Params map[string]string
+}
+
+// IsZero reports whether c is the zero value. Zero challenges are omitted
+// when NewHandler composes the WWW-Authenticate header.
+func (c Challenge) IsZero() bool { return c.Scheme == "" }
+
+// String returns the RFC 7235 wire representation of the challenge.
+// Param values are serialized as quoted-strings with `\` and `"` escaped.
+func (c Challenge) String() string {
+	if c.IsZero() {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(c.Scheme)
+	for i, k := range slices.Sorted(maps.Keys(c.Params)) {
+		if i == 0 {
+			sb.WriteByte(' ')
+		} else {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(k)
+		sb.WriteString(`="`)
+		writeQuoted(&sb, c.Params[k])
+		sb.WriteByte('"')
+	}
+	return sb.String()
+}
+
+func writeQuoted(sb *strings.Builder, v string) {
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' || v[i] == '"' {
+			sb.WriteByte('\\')
+		}
+		sb.WriteByte(v[i])
+	}
 }
 
 // Loader loads credentials by identifier.
@@ -124,11 +188,20 @@ func NewHandler(next http.Handler, authenticators ...Authenticator) http.Handler
 				break
 			}
 		}
-		writeUnauthorizedError(w, r)
+		writeUnauthorizedError(w, r, authenticators)
 	})
 }
 
-func writeUnauthorizedError(w http.ResponseWriter, r *http.Request) {
+func writeUnauthorizedError(w http.ResponseWriter, r *http.Request, authenticators []Authenticator) {
+	var parts []string
+	for _, auth := range authenticators {
+		if c := auth.Challenge(r); !c.IsZero() {
+			parts = append(parts, c.String())
+		}
+	}
+	if len(parts) > 0 {
+		w.Header().Set("WWW-Authenticate", strings.Join(parts, ", "))
+	}
 	if isConnectRPC(r) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)

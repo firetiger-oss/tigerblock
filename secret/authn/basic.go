@@ -46,6 +46,15 @@ func (s BasicScheme[C]) Inject(req *http.Request, credential C) {
 	req.SetBasicAuth(credential.Username(), credential.Password())
 }
 
+// Challenge returns a Basic WWW-Authenticate challenge with realm defaulted
+// to the request's Host.
+func (s BasicScheme[C]) Challenge(req *http.Request) Challenge {
+	return Challenge{
+		Scheme: "Basic",
+		Params: map[string]string{"realm": req.Host},
+	}
+}
+
 // NewBasicAuthenticator returns an Authenticator that uses HTTP Basic Authentication.
 // C must implement BasicAuthCredential and be loadable via the provided Loader.
 // Uses the username from Basic Auth as the credential identifier.

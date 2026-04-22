@@ -406,4 +406,155 @@ func TestWriteUnauthorizedError(t *testing.T) {
 			t.Errorf("expected plain text Unauthorized, got %q", body)
 		}
 	})
+
+	t.Run("WWW-Authenticate absent when only non-contributing authenticators", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/resource", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("WWW-Authenticate"); got != "" {
+			t.Errorf("expected no WWW-Authenticate header, got %q", got)
+		}
+	})
+}
+
+func TestChallengeString(t *testing.T) {
+	tests := []struct {
+		name string
+		c    Challenge
+		want string
+	}{
+		{
+			name: "zero value",
+			c:    Challenge{},
+			want: "",
+		},
+		{
+			name: "scheme only",
+			c:    Challenge{Scheme: "Bearer"},
+			want: "Bearer",
+		},
+		{
+			name: "single param",
+			c:    Challenge{Scheme: "Basic", Params: map[string]string{"realm": "example.com"}},
+			want: `Basic realm="example.com"`,
+		},
+		{
+			name: "multiple params sorted alphabetically",
+			c: Challenge{Scheme: "Bearer", Params: map[string]string{
+				"realm": "example.com",
+				"scope": "read write",
+				"error": "invalid_token",
+			}},
+			want: `Bearer error="invalid_token", realm="example.com", scope="read write"`,
+		},
+		{
+			name: "quote and backslash escaped",
+			c:    Challenge{Scheme: "Basic", Params: map[string]string{"realm": `we"ird\value`}},
+			want: `Basic realm="we\"ird\\value"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.c.String(); got != tt.want {
+				t.Errorf("Challenge.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChallengeIsZero(t *testing.T) {
+	if !(Challenge{}).IsZero() {
+		t.Error("zero Challenge should report IsZero")
+	}
+	if (Challenge{Scheme: "Basic"}).IsZero() {
+		t.Error("Challenge with scheme should not report IsZero")
+	}
+}
+
+func TestNewHandlerWWWAuthenticate(t *testing.T) {
+	challenging := func(scheme string) Authenticator {
+		return challengeAuthenticator{scheme: scheme}
+	}
+
+	t.Run("single challenge", func(t *testing.T) {
+		handler := NewHandler(
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("next handler should not be called")
+			}),
+			challenging("Basic"),
+		)
+
+		req := httptest.NewRequest("GET", "http://example.com:8080/resource", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+		want := `Basic realm="example.com:8080"`
+		if got := rec.Header().Get("WWW-Authenticate"); got != want {
+			t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("multiple challenges composed in order", func(t *testing.T) {
+		handler := NewHandler(
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("next handler should not be called")
+			}),
+			challenging("Basic"),
+			challenging("Bearer"),
+		)
+
+		req := httptest.NewRequest("GET", "http://example.com/resource", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		want := `Basic realm="example.com", Bearer realm="example.com"`
+		if got := rec.Header().Get("WWW-Authenticate"); got != want {
+			t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("non-contributing authenticators skipped", func(t *testing.T) {
+		handler := NewHandler(
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("next handler should not be called")
+			}),
+			AuthenticatorFunc(func(ctx context.Context, req *http.Request) (context.Context, error) {
+				return nil, ErrNotFound
+			}),
+			challenging("Bearer"),
+		)
+
+		req := httptest.NewRequest("GET", "http://example.com/resource", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		want := `Bearer realm="example.com"`
+		if got := rec.Header().Get("WWW-Authenticate"); got != want {
+			t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+		}
+	})
+}
+
+// challengeAuthenticator always fails with ErrNotFound and contributes a
+// Basic- or Bearer-style challenge built from the request Host. It's a test
+// double that avoids pulling the full Basic/Bearer credential-loading path.
+type challengeAuthenticator struct {
+	scheme string
+}
+
+func (a challengeAuthenticator) Authenticate(context.Context, *http.Request) (context.Context, error) {
+	return nil, ErrNotFound
+}
+
+func (a challengeAuthenticator) Challenge(req *http.Request) Challenge {
+	return Challenge{
+		Scheme: a.scheme,
+		Params: map[string]string{"realm": req.Host},
+	}
 }
