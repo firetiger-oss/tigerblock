@@ -275,6 +275,34 @@ func (b *Bucket) PutObject(ctx context.Context, key string, value io.Reader, opt
 	if s3Client, _ := b.client.(*s3.Client); s3Client != nil {
 		usePathStyle = s3Client.Options().UsePathStyle
 	}
+	_, seekable := value.(io.Seeker)
+	// The AWS SDK's signer needs a seekable body when we dispatch through
+	// PutObject. Known-length non-seekable readers hit:
+	//
+	//  "failed to seek body to start, request stream is not seekable"
+	//
+	// Normalize that case by spooling to disk so we preserve the direct
+	// PutObject path without buffering the entire payload in memory.
+	//
+	// We also keep the existing path-style + unknown-length workaround below.
+	if !seekable && contentLength >= 0 {
+		tmpbuf, err := os.CreateTemp("", "s3.object.*")
+		if err != nil {
+			return storage.ObjectInfo{}, makeIcebergError(err)
+		}
+		defer os.Remove(tmpbuf.Name())
+		defer tmpbuf.Close()
+
+		if _, err := tmpbuf.ReadFrom(value); err != nil {
+			return storage.ObjectInfo{}, makeIcebergError(err)
+		}
+		if _, err := tmpbuf.Seek(0, io.SeekStart); err != nil {
+			return storage.ObjectInfo{}, makeIcebergError(err)
+		}
+
+		req.Body = tmpbuf
+	}
+
 	// This is a very specific case where these three conditions are met:
 	// 1. the client is a *native* S3 client
 	// 2. the client was configured to use path-style URLs

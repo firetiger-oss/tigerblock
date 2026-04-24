@@ -1,7 +1,9 @@
 package s3_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -159,5 +161,79 @@ func TestS3RangeHeaderFormat(t *testing.T) {
 				t.Errorf("expected Range %q, got %q", tc.expectedRange, mock.capturedRange)
 			}
 		})
+	}
+}
+
+func TestS3PutObjectKnownLengthNonSeekableBodyStaysSinglePart(t *testing.T) {
+	var (
+		putCount       int
+		multipartCalls []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if _, ok := q["uploads"]; ok {
+			multipartCalls = append(multipartCalls, "CreateMultipartUpload")
+			http.Error(w, "multipart not expected", http.StatusMethodNotAllowed)
+			return
+		}
+		if q.Get("uploadId") != "" {
+			multipartCalls = append(multipartCalls, r.Method+" uploadId="+q.Get("uploadId"))
+			http.Error(w, "multipart not expected", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Method != http.MethodPut {
+			http.Error(w, "unexpected method "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		putCount++
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("ETag", `"deadbeef"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadDefaultConfig(t.Context(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+		config.WithHTTPClient(awshttp.NewBuildableClient()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(u.String())
+		o.UsePathStyle = true
+	})
+	bucket := storages3.NewBucket(client, "test-bucket")
+
+	payload := bytes.Repeat([]byte("abcdef"), 1024*1024)
+	sum := sha256.Sum256(payload)
+	body := io.NopCloser(bytes.NewReader(payload))
+
+	if _, seekable := any(body).(io.Seeker); seekable {
+		t.Fatalf("io.NopCloser(bytes.NewReader(...)) unexpectedly implements io.Seeker")
+	}
+
+	if _, err := bucket.PutObject(
+		t.Context(),
+		"test-key",
+		body,
+		storage.ContentLength(int64(len(payload))),
+		storage.ChecksumSHA256(sum),
+	); err != nil {
+		t.Fatalf("PutObject with non-seekable body failed: %v", err)
+	}
+
+	if len(multipartCalls) != 0 {
+		t.Fatalf("PutObject unexpectedly went multipart: %v", multipartCalls)
+	}
+	if putCount != 1 {
+		t.Fatalf("expected exactly 1 PutObject request, got %d", putCount)
 	}
 }
