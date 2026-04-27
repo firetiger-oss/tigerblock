@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func Tracer() trace.Tracer { return otel.Tracer("github.com/firetiger-oss/tigerblock") }
+func Tracer() trace.Tracer { return otel.Tracer("github.com/firetiger-oss/tigerblock/storage") }
 
 func Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	ctx, span := Tracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))

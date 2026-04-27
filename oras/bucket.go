@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock"
+	"github.com/firetiger-oss/tigerblock/storage"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/errdef"

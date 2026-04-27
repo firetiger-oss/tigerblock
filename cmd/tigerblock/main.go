@@ -15,11 +15,11 @@ import (
 	"github.com/firetiger-oss/tigerblock/uri"
 
 	// Import storage backends for side effects
-	_ "github.com/firetiger-oss/tigerblock/file"
-	_ "github.com/firetiger-oss/tigerblock/gs"
-	_ "github.com/firetiger-oss/tigerblock/http"
-	_ "github.com/firetiger-oss/tigerblock/memory"
-	_ "github.com/firetiger-oss/tigerblock/s3"
+	_ "github.com/firetiger-oss/tigerblock/storage/file"
+	_ "github.com/firetiger-oss/tigerblock/storage/gs"
+	_ "github.com/firetiger-oss/tigerblock/storage/http"
+	_ "github.com/firetiger-oss/tigerblock/storage/memory"
+	_ "github.com/firetiger-oss/tigerblock/storage/s3"
 
 	basicauth "github.com/firetiger-oss/tigerblock/secret/authn/basic"
 	bearerauth "github.com/firetiger-oss/tigerblock/secret/authn/bearer"

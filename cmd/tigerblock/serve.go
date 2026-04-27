@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/firetiger-oss/tigerblock"
-	storagehttp "github.com/firetiger-oss/tigerblock/http"
+	"github.com/firetiger-oss/tigerblock/storage"
+	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
 	"github.com/firetiger-oss/tigerblock/secret"
 	"github.com/firetiger-oss/tigerblock/secret/authn"
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/firetiger-oss/tigerblock"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/uri"
 	"github.com/spf13/cobra"
 )

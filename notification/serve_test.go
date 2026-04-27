@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock"
-	"github.com/firetiger-oss/tigerblock/memory"
+	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 	"github.com/firetiger-oss/tigerblock/notification"
 	_ "github.com/firetiger-oss/tigerblock/notification/aws"
 	_ "github.com/firetiger-oss/tigerblock/notification/cloudflare"

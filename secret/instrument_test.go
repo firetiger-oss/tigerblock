@@ -3,7 +3,7 @@ package secret_test
 import (
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock/memory"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 	"github.com/firetiger-oss/tigerblock/secret"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/trace"

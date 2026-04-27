@@ -14,7 +14,7 @@ import (
 	"github.com/firetiger-oss/tigerblock/secret"
 	"github.com/firetiger-oss/tigerblock/secret/bucket"
 
-	_ "github.com/firetiger-oss/tigerblock/file" // register file storage backend
+	_ "github.com/firetiger-oss/tigerblock/storage/file" // register file storage backend
 )
 
 func init() {

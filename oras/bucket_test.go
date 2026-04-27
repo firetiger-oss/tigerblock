@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock"
-	"github.com/firetiger-oss/tigerblock/memory"
+	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 	storageoras "github.com/firetiger-oss/tigerblock/oras"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
