@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock"
-	"github.com/firetiger-oss/tigerblock/memory"
 	storageoras "github.com/firetiger-oss/tigerblock/oras"
+	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"

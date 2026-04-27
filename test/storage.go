@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock"
-	"github.com/firetiger-oss/tigerblock/gs"
-	storagehttp "github.com/firetiger-oss/tigerblock/http"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
+	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/gs"
+	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 

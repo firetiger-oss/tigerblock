@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock/memory"
 	"github.com/firetiger-oss/tigerblock/secret"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 )
 
 func TestPrefix(t *testing.T) {

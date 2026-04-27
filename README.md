@@ -1,4 +1,4 @@
-# storage [![CI](https://github.com/firetiger-oss/storage/actions/workflows/ci.yml/badge.svg)](https://github.com/firetiger-oss/storage/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/firetiger-oss/storage.svg)](https://pkg.go.dev/github.com/firetiger-oss/storage)
+# tigerblock [![CI](https://github.com/firetiger-oss/tigerblock/actions/workflows/ci.yml/badge.svg)](https://github.com/firetiger-oss/tigerblock/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/firetiger-oss/tigerblock.svg)](https://pkg.go.dev/github.com/firetiger-oss/tigerblock)
 
 <p align="center">
   <img width="500" height="335" alt="Gemini_Generated_Image_msys2umsys2umsys" src="https://github.com/user-attachments/assets/2c8da1bf-8ac2-41cc-84ca-c16d4cbb91b6" />
@@ -17,8 +17,8 @@ URLs, caching layers, bucket notifications, secret storage, observability,
 and composable middleware — the kind of infrastructure that every serious
 application ends up reimplementing from scratch.
 
-The `storage` package ships all of that in one cohesive toolkit. At its core is
-a single [`Bucket`](https://pkg.go.dev/github.com/firetiger-oss/storage#Bucket)
+`tigerblock` ships all of that in one cohesive toolkit. At its core is
+a single [`Bucket`](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#Bucket)
 interface covering S3, Cloudflare R2, Google Cloud Storage, the local file system,
 HTTP, and in-memory storage — pick a URI, import a driver, and go. But the real value is
 what's built on top: composable adapters for caching, prefixing,
@@ -28,28 +28,28 @@ operations return `iter.Seq2` iterators that plug straight into range loops and
 the standard library, keeping everything idiomatic.
 
 Whether you are building a data pipeline, a media service, or a CLI tool that
-needs to talk to the cloud, `storage` is designed to let you focus on your
+needs to talk to the cloud, `tigerblock` is designed to let you focus on your
 application instead of the plumbing underneath it.
 
 ## Usage
 
-### [storage.LoadBucket](https://pkg.go.dev/github.com/firetiger-oss/storage#LoadBucket)
+### [storage.LoadBucket](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#LoadBucket)
 
 Load a bucket by URI. The scheme selects the backend — import the backend
 package for side effects to register it.
 
 ```go
 import (
-    "github.com/firetiger-oss/storage"
-    _ "github.com/firetiger-oss/storage/s3"  // register s3:// scheme
-    _ "github.com/firetiger-oss/storage/gs"  // register gs:// scheme
-    _ "github.com/firetiger-oss/storage/file" // register file:// scheme
+    "github.com/firetiger-oss/tigerblock/storage"
+    _ "github.com/firetiger-oss/tigerblock/storage/s3"   // register s3:// scheme
+    _ "github.com/firetiger-oss/tigerblock/storage/gs"   // register gs:// scheme
+    _ "github.com/firetiger-oss/tigerblock/storage/file" // register file:// scheme
 )
 
 bucket, err := storage.LoadBucket(ctx, "s3://my-bucket")
 ```
 
-### [storage.GetObject](https://pkg.go.dev/github.com/firetiger-oss/storage#GetObject) / [storage.PutObject](https://pkg.go.dev/github.com/firetiger-oss/storage#PutObject)
+### [storage.GetObject](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#GetObject) / [storage.PutObject](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#PutObject)
 
 Top-level convenience functions operate directly on object URIs without
 loading a bucket first.
@@ -66,7 +66,7 @@ reader, info, err := storage.GetObject(ctx, "s3://my-bucket/path/to/file.txt")
 defer reader.Close()
 ```
 
-### [storage.ListObjects](https://pkg.go.dev/github.com/firetiger-oss/storage#ListObjects)
+### [storage.ListObjects](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#ListObjects)
 
 List objects under a prefix. Results stream as an iterator.
 
@@ -79,7 +79,7 @@ for object, err := range storage.ListObjects(ctx, "s3://my-bucket/logs/") {
 }
 ```
 
-### [storage.AdaptBucket](https://pkg.go.dev/github.com/firetiger-oss/storage#AdaptBucket)
+### [storage.AdaptBucket](https://pkg.go.dev/github.com/firetiger-oss/tigerblock/storage#AdaptBucket)
 
 Wrap a bucket with adapters to add caching, prefixing, instrumentation,
 or read-only protection.
@@ -98,12 +98,12 @@ readOnly := storage.ReadOnlyBucket(bucket)
 
 | Backend | URI | Import |
 |---------|-----|--------|
-| Amazon S3 | `s3://bucket/prefix` | `_ "github.com/firetiger-oss/storage/s3"` |
-| Cloudflare R2 | `r2://bucket/prefix` | `_ "github.com/firetiger-oss/storage/r2"` |
-| Google Cloud Storage | `gs://bucket/prefix` | `_ "github.com/firetiger-oss/storage/gs"` |
-| Local file system | `file:///path` | `_ "github.com/firetiger-oss/storage/file"` |
-| In-memory | `:memory:` | `_ "github.com/firetiger-oss/storage/memory"` |
-| HTTP (S3-compatible) | `http://host/path` | `_ "github.com/firetiger-oss/storage/http"` |
+| Amazon S3 | `s3://bucket/prefix` | `_ "github.com/firetiger-oss/tigerblock/storage/s3"` |
+| Cloudflare R2 | `r2://bucket/prefix` | `_ "github.com/firetiger-oss/tigerblock/storage/r2"` |
+| Google Cloud Storage | `gs://bucket/prefix` | `_ "github.com/firetiger-oss/tigerblock/storage/gs"` |
+| Local file system | `file:///path` | `_ "github.com/firetiger-oss/tigerblock/storage/file"` |
+| In-memory | `:memory:` | `_ "github.com/firetiger-oss/tigerblock/storage/memory"` |
+| HTTP (S3-compatible) | `http://host/path` | `_ "github.com/firetiger-oss/tigerblock/storage/http"` |
 
 ## Contributing
 
@@ -112,7 +112,7 @@ Contributions are welcome! To get started:
 1. Ensure you have Go 1.25+ installed
 2. Run `go test ./...` to verify tests pass
 
-Please report bugs and feature requests via [GitHub Issues](https://github.com/firetiger-oss/storage/issues).
+Please report bugs and feature requests via [GitHub Issues](https://github.com/firetiger-oss/tigerblock/issues).
 
 ## License
 

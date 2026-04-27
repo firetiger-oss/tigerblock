@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"oras.land/oras-go/v2/errdef"
 )
 

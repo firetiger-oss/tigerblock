@@ -4,16 +4,17 @@ This file contains information to help Claude (and other AI assistants) understa
 
 ## Project Overview
 
-**Name**: storage
-**Type**: Go library/package
-**Purpose**: Unified interface for cloud object storage providers (S3, GCS, file system, memory, HTTP)
+**Name**: tigerblock
+**Module**: `github.com/firetiger-oss/tigerblock`
+**Type**: Go library/toolkit
+**Purpose**: Batteries-included toolkit for building applications on top of object storage in Go (storage abstraction, secrets, notifications, OCI/oras integration, CLI)
 **License**: Apache 2.0
 
 ## Architecture
 
-### Core Interface
+### Storage Package (`storage/`)
 
-The `Bucket` interface (`storage.go`) defines 14 methods for storage operations:
+The `storage` package (`github.com/firetiger-oss/tigerblock/storage`) provides a unified interface for cloud object storage providers. The `Bucket` interface (`storage/storage.go`) defines 14 methods for storage operations:
 
 **Metadata Operations:**
 - `Location() string` - Returns the bucket URI
@@ -62,25 +63,27 @@ type ObjectInfo struct {
 
 | Backend | URI Format | Description |
 |---------|------------|-------------|
-| `s3/` | `s3://bucket-name/path` | Amazon S3 |
-| `gs/` | `gs://bucket-name/path` | Google Cloud Storage |
-| `file/` | `file:///path` or `/path` | Local file system |
-| `memory/` | `:memory:` | In-memory (testing) |
-| `http/` | `http://host/path` | HTTP/HTTPS with S3-compatible server |
+| `storage/s3/` | `s3://bucket-name/path` | Amazon S3 |
+| `storage/r2/` | `r2://bucket-name/path` | Cloudflare R2 |
+| `storage/gs/` | `gs://bucket-name/path` | Google Cloud Storage |
+| `storage/file/` | `file:///path` or `/path` | Local file system |
+| `storage/memory/` | `:memory:` | In-memory (testing) |
+| `storage/http/` | `http://host/path` | HTTP/HTTPS with S3-compatible server |
 
 ### Adapters
 
-Adapters wrap buckets to add functionality:
+Adapters wrap buckets to add functionality (all under `storage/`):
 
 | File | Purpose |
 |------|---------|
-| `cache.go` | In-memory caching with LRU and TTL |
-| `prefix.go` | Mount bucket at a key prefix |
-| `readonly.go` | Make bucket read-only |
-| `instrument.go` | OpenTelemetry tracing |
-| `mount.go` | Mount different buckets at different prefixes |
-| `merge.go` | Combine multiple buckets into one |
-| `empty.go` | Read-only empty bucket |
+| `storage/cache.go` | In-memory caching with LRU and TTL |
+| `storage/prefix.go` | Mount bucket at a key prefix |
+| `storage/readonly.go` | Make bucket read-only |
+| `storage/instrument.go` | OpenTelemetry tracing |
+| `storage/mount.go` | Mount different buckets at different prefixes |
+| `storage/merge.go` | Combine multiple buckets into one |
+| `storage/empty.go` | Read-only empty bucket |
+| `storage/overlay.go` | Layered bucket overlay |
 
 ### Key Patterns
 
@@ -109,14 +112,14 @@ var (
 
 ## Supporting Packages
 
-### cache/
+### storage/cache/
 Caching implementations:
 - `Cache[K,V]` - Generic cache with singleflight deduplication
 - `SeqCache[K,V]` - Iterator-aware caching for `iter.Seq2`
 - `LRU[K,V]` - LRU cache with promise-based async loading
 - `TTL[K,V]` - LRU with time-to-live expiration
 
-### backoff/
+### storage/backoff/
 Retry logic:
 - `Exponential()` - Exponential backoff strategy (100ms → 200ms → 400ms...)
 - `FullJitter(strategy)` - Adds randomization to prevent thundering herd
@@ -144,23 +147,35 @@ Iterator utilities:
 - `TestStorage(t, loadBucket)` - Runs 30+ test scenarios
 - `TestManager(t, loadManager)` - Tests secret managers
 
+### secret/
+Pluggable secret manager with backends for AWS Secrets Manager, GCP Secret Manager, environment variables, files, and bucket-backed stores. Includes signing helpers under `secret/authn/` (basic, bearer, sigv4).
+
+### notification/
+Bucket change notification handling with backends for AWS EventBridge, GCP Pub/Sub, and Cloudflare Queues.
+
+### oras/
+OCI/ORAS integration: read and write OCI artifacts on top of any `storage.Bucket`.
+
+### cmd/tigerblock/
+CLI tool (`tigerblock`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
+
 ## Backend-Specific Notes
 
-### S3 Backend (`s3/`)
+### S3 Backend (`storage/s3/`)
 - Uses AWS SDK v2
 - Supports multipart uploads via SDK manager
 - Presigned URLs with lazy client initialization
 - Path-style URLs: set `AWS_S3_USE_PATH_STYLE=true`
-- Fake S3 client for testing: `s3/fakes3/`
+- Fake S3 client for testing: `storage/s3/fakes3/`
 
-### Google Cloud Storage (`gs/`)
+### Google Cloud Storage (`storage/gs/`)
 - Dual client architecture:
   - GCS client for reads
-  - Custom `gsclient` for streaming uploads
+  - Custom `gsclient` (`storage/gs/gsclient/`) for streaming uploads
 - V4 signing for presigned URLs
 - Automatic credential detection
 
-### File System (`file/`)
+### File System (`storage/file/`)
 - Metadata stored in extended attributes:
   - `user.storage.cache-control`
   - `user.storage.content-type`
@@ -171,13 +186,13 @@ Iterator utilities:
 - File watching via fsnotify
 - Platform-specific: Darwin (`file_darwin.go`), Linux (`file_linux.go`)
 
-### Memory Backend (`memory/`)
+### Memory Backend (`storage/memory/`)
 - Thread-safe with `sync.RWMutex`
 - Listener pattern for watch operations
 - MD5-based ETag generation
 - Presigning returns `ErrPresignNotSupported`
 
-### HTTP Backend (`http/`)
+### HTTP Backend (`storage/http/`)
 - Full CRUD operations (not read-only)
 - S3-compatible server: `BucketHandler`
 - Supports ListObjectsV1 (marker) and V2 (continuation-token)
@@ -188,30 +203,49 @@ Iterator utilities:
 
 ```
 /
-├── storage.go              # Main interface and global functions
-├── options.go              # Option types (Get, Put, List)
-├── cache.go                # Cache adapter
-├── prefix.go               # Prefix adapter
-├── readonly.go             # Read-only adapter
-├── mount.go                # Mount adapter
-├── merge.go                # Merge adapter
-├── empty.go                # Empty bucket adapter
-├── watch.go                # Generic watch implementation
-├── instrument.go           # OpenTelemetry instrumentation
-├── log.go                  # Structured logging adapter
-├── file.go                 # fs.FS interface for buckets
-├── backoff/                # Retry strategies
-├── cache/                  # Cache implementations
-├── cmd/                    # Command line tools
-├── file/                   # File system backend
-├── gs/                     # Google Cloud Storage backend
-│   └── gsclient/           # Custom streaming upload client
-├── http/                   # HTTP backend and S3-compatible server
-├── memory/                 # In-memory backend
-├── notification/           # Notification system
-├── s3/                     # Amazon S3 backend
-│   └── fakes3/             # Fake S3 client for testing
-├── secret/                 # Secret management (signing, etc.)
+├── storage/                # Storage abstraction (package storage)
+│   ├── storage.go          # Main interface and global functions
+│   ├── options.go          # Option types (Get, Put, List)
+│   ├── cache.go            # Cache adapter
+│   ├── prefix.go           # Prefix adapter
+│   ├── readonly.go         # Read-only adapter
+│   ├── mount.go            # Mount adapter
+│   ├── merge.go            # Merge adapter
+│   ├── empty.go            # Empty bucket adapter
+│   ├── overlay.go          # Overlay adapter
+│   ├── watch.go            # Generic watch implementation
+│   ├── instrument.go       # OpenTelemetry instrumentation
+│   ├── log.go              # Structured logging adapter
+│   ├── file.go             # fs.FS interface for buckets
+│   ├── backoff/            # Retry strategies
+│   ├── cache/              # Cache implementations
+│   ├── file/               # File system backend
+│   ├── fuse/               # FUSE mount backend
+│   ├── gs/                 # Google Cloud Storage backend
+│   │   └── gsclient/       # Custom streaming upload client
+│   ├── http/               # HTTP backend and S3-compatible server
+│   ├── memory/             # In-memory backend
+│   ├── r2/                 # Cloudflare R2 backend
+│   └── s3/                 # Amazon S3 backend
+│       └── fakes3/         # Fake S3 client for testing
+├── cmd/
+│   └── tigerblock/         # CLI tool
+├── notification/           # Bucket change notifications
+│   ├── aws/                # AWS EventBridge
+│   ├── cloudflare/         # Cloudflare Queues
+│   ├── gcp/                # GCP Pub/Sub
+│   └── serve/              # HTTP delivery
+├── oras/                   # OCI/ORAS integration
+├── secret/                 # Secret management
+│   ├── authn/              # Authentication signers (basic, bearer, sigv4)
+│   ├── aws/                # AWS Secrets Manager
+│   ├── bucket/             # Bucket-backed secret store
+│   ├── env/                # Environment variable secrets
+│   ├── file/               # File-backed secrets
+│   ├── gcp/                # GCP Secret Manager
+│   ├── gs/                 # GCS-backed secrets
+│   ├── http/               # HTTP-backed secrets
+│   └── s3/                 # S3-backed secrets
 ├── internal/
 │   ├── oteltrace/          # OpenTelemetry utilities
 │   └── sequtil/            # Iterator utilities
@@ -230,7 +264,7 @@ go test ./...
 go test -race ./...
 
 # Run specific package tests
-go test ./s3
+go test ./storage/s3
 ```
 
 ### Dependencies
@@ -243,7 +277,7 @@ go test ./s3
 
 ### Adding a New Backend
 
-1. Create package directory (e.g., `azure/`)
+1. Create package directory under `storage/` (e.g., `storage/azure/`)
 2. Implement `storage.Bucket` interface (all 14 methods)
 3. Create `NewRegistry() storage.Registry`
 4. Register in `init()`:
@@ -256,7 +290,7 @@ go test ./s3
 
 ### Common Issues
 
-1. **Import for side effects**: `import _ "github.com/firetiger-oss/storage/s3"`
+1. **Import for side effects**: `import _ "github.com/firetiger-oss/tigerblock/storage/s3"`
 2. **URI trailing slashes**: Automatically handled by registry
 3. **Context cancellation**: Always respect `ctx.Done()`
 

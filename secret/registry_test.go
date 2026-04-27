@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock/memory"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 )
 
 func TestRegister(t *testing.T) {
