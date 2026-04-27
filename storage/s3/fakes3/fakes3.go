@@ -14,8 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/storage/memory"
 	"github.com/google/uuid"
 )

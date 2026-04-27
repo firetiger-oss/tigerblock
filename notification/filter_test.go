@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/firetiger-oss/tigerblock/notification"
 	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/storage/memory"
-	"github.com/firetiger-oss/tigerblock/notification"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 

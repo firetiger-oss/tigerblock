@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/storage/memory"
 	storagetest "github.com/firetiger-oss/tigerblock/test"
 )

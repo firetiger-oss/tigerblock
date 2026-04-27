@@ -27,9 +27,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/firetiger-oss/tigerblock/secret/authn/sigv4"
 	"github.com/firetiger-oss/tigerblock/storage"
 	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
-	"github.com/firetiger-oss/tigerblock/secret/authn/sigv4"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 

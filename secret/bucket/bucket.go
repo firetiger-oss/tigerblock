@@ -7,8 +7,8 @@ package bucket
 import (
 	"context"
 
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/secret"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 

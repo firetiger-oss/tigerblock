@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage"
-	"github.com/firetiger-oss/tigerblock/storage/memory"
 	"github.com/firetiger-oss/tigerblock/notification"
 	"github.com/firetiger-oss/tigerblock/notification/serve"
+	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/memory"
 )
 
 func TestServeHTTPMode(t *testing.T) {

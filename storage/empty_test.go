@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
+	"github.com/firetiger-oss/tigerblock/storage"
 )
 
 func TestEmptyBucket(t *testing.T) {

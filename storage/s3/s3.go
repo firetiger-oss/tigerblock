@@ -22,11 +22,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/storage/backoff"
 	"github.com/firetiger-oss/tigerblock/storage/cache"
 	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
-	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 

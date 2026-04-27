@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/secret"
 	basicauth "github.com/firetiger-oss/tigerblock/secret/authn/basic"
 	bearerauth "github.com/firetiger-oss/tigerblock/secret/authn/bearer"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 
