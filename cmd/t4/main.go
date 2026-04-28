@@ -26,8 +26,8 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "storage",
-	Short: "Storage CLI for interacting with object storage",
+	Use:   "t4",
+	Short: "tigerblock CLI for interacting with object storage",
 	Long:  "A command line interface for listing, copying, and managing objects across storage backends (S3, GCS, file, memory, HTTP).",
 }
 

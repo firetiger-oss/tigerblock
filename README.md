@@ -105,6 +105,89 @@ readOnly := storage.ReadOnlyBucket(bucket)
 | In-memory | `:memory:` | `_ "github.com/firetiger-oss/tigerblock/storage/memory"` |
 | HTTP (S3-compatible) | `http://host/path` | `_ "github.com/firetiger-oss/tigerblock/storage/http"` |
 
+## CLI (`t4`)
+
+`t4` is the command line interface that ships with `tigerblock`. It exposes
+the same backends used by the library — pick a URI and the matching scheme
+selects the backend.
+
+### Install
+
+```sh
+go install github.com/firetiger-oss/tigerblock/cmd/t4@latest
+```
+
+### Help
+
+Run `t4 --help` to see the list of available commands and global flags:
+
+```text
+$ t4 --help
+A command line interface for listing, copying, and managing objects across storage backends (S3, GCS, file, memory, HTTP).
+
+Usage:
+  t4 [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  cp          Copy objects between storage locations
+  help        Help about any command
+  ls          List objects at bucket URIs
+  rm          Delete objects at URIs
+  serve       Serve a storage bucket over HTTP
+  stat        Show detailed object information
+
+Flags:
+      --basic-auth string     HTTP basic auth credentials in username:password format
+      --bearer-token string   HTTP bearer token for authentication
+  -h, --help                  help for t4
+
+Use "t4 [command] --help" for more information about a command.
+```
+
+Each subcommand has its own help (`t4 ls --help`, `t4 serve --help`, ...).
+
+### `t4 ls`
+
+List objects at one or more bucket URIs.
+
+```sh
+# List the top level of a bucket (uses "/" as the delimiter by default)
+t4 ls s3://my-bucket/
+
+# Long format: size, last-modified, key
+t4 ls -l s3://my-bucket/logs/
+
+# Recurse and emit JSON
+t4 ls -r -o json s3://my-bucket/logs/
+
+# Cap the number of results
+t4 ls -n 100 gs://my-bucket/data/
+```
+
+### `t4 serve`
+
+Start an HTTP server that exposes a bucket via the S3-compatible handler from
+`storage/http`. Useful for sharing a local directory, an in-memory bucket, or
+fronting a remote bucket behind authentication.
+
+```sh
+# Serve a local directory on :8184
+t4 serve file:///var/data
+
+# Serve a bucket on a custom port
+t4 serve --http :9000 s3://my-bucket
+
+# Require HTTP basic auth, with the password loaded from a secret store
+t4 serve --basic-auth-username alice \
+         --basic-auth-secret-id env://MY_PASSWORD \
+         file:///var/data
+
+# Require a bearer token loaded from AWS Secrets Manager
+t4 serve --bearer-token-secret-id awssm://my-secret \
+         s3://my-bucket
+```
+
 ## Contributing
 
 Contributions are welcome! To get started:

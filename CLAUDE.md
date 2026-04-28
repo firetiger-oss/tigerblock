@@ -156,8 +156,8 @@ Bucket change notification handling with backends for AWS EventBridge, GCP Pub/S
 ### oras/
 OCI/ORAS integration: read and write OCI artifacts on top of any `storage.Bucket`.
 
-### cmd/tigerblock/
-CLI tool (`tigerblock`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
+### cmd/t4/
+CLI tool (`t4`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
 
 ## Backend-Specific Notes
 
@@ -229,7 +229,7 @@ CLI tool (`tigerblock`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
 │   └── s3/                 # Amazon S3 backend
 │       └── fakes3/         # Fake S3 client for testing
 ├── cmd/
-│   └── tigerblock/         # CLI tool
+│   └── t4/                 # CLI tool
 ├── notification/           # Bucket change notifications
 │   ├── aws/                # AWS EventBridge
 │   ├── cloudflare/         # Cloudflare Queues
