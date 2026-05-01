@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+.gitignore
+*.md
+LICENSE
+.env
+**/.claude/settings.local.json
