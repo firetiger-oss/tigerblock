@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/tigerblock/t4
+  IMAGE_NAME: ${{ github.repository_owner }}/t4
 
 jobs:
   docker:
