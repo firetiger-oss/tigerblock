@@ -897,3 +897,106 @@ func TestCacheTTLZeroDisablesExpiration(t *testing.T) {
 
 	t.Log("TTL=0 (no expiration) test passed")
 }
+
+// TestCacheCacheControlMaxAgeOverridesTTL verifies that an object whose
+// Cache-Control header carries a `max-age=N` directive is cached for that
+// duration regardless of the cache-wide CacheTTL option. The cache-wide TTL
+// is the fallback for objects whose Cache-Control does not declare max-age.
+func TestCacheCacheControlMaxAgeOverridesTTL(t *testing.T) {
+	const cacheWideTTL = 10 * time.Second
+
+	cache := storage.NewCache(storage.CacheTTL(cacheWideTTL))
+	memBucket := new(memory.Bucket)
+	bucket := cache.AdaptBucket(memBucket)
+	ctx := context.Background()
+
+	testKey := "max-age-object"
+	first := []byte("first")
+	second := []byte("second")
+
+	if _, err := memBucket.PutObject(ctx, testKey, bytes.NewReader(first),
+		storage.CacheControl("max-age=1, public")); err != nil {
+		t.Fatalf("PutObject with max-age failed: %v", err)
+	}
+
+	reader, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("first GetObject failed: %v", err)
+	}
+	got, _ := io.ReadAll(reader)
+	reader.Close()
+	if !bytes.Equal(got, first) {
+		t.Fatalf("first GetObject body: got %q, want %q", got, first)
+	}
+
+	if _, err := memBucket.PutObject(ctx, testKey, bytes.NewReader(second),
+		storage.CacheControl("max-age=1, public")); err != nil {
+		t.Fatalf("update PutObject failed: %v", err)
+	}
+
+	reader, _, err = bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("second GetObject failed: %v", err)
+	}
+	got, _ = io.ReadAll(reader)
+	reader.Close()
+	if !bytes.Equal(got, first) {
+		t.Errorf("within max-age: got %q, want cached %q", got, first)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+
+	reader, _, err = bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("third GetObject failed: %v", err)
+	}
+	got, _ = io.ReadAll(reader)
+	reader.Close()
+	if !bytes.Equal(got, second) {
+		t.Errorf("after max-age: got %q, want refreshed %q", got, second)
+	}
+}
+
+// TestCacheCacheControlFallsBackToCacheTTL verifies that objects without a
+// Cache-Control max-age directive still expire according to the cache-wide
+// TTL. This guards against the parser silently treating "no max-age" as
+// "never expire".
+func TestCacheCacheControlFallsBackToCacheTTL(t *testing.T) {
+	const cacheWideTTL = 50 * time.Millisecond
+
+	cache := storage.NewCache(storage.CacheTTL(cacheWideTTL))
+	memBucket := new(memory.Bucket)
+	bucket := cache.AdaptBucket(memBucket)
+	ctx := context.Background()
+
+	testKey := "no-max-age"
+	first := []byte("first")
+	second := []byte("second")
+
+	if _, err := bucket.PutObject(ctx, testKey, bytes.NewReader(first)); err != nil {
+		t.Fatalf("PutObject failed: %v", err)
+	}
+
+	reader, _, err := bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("first GetObject failed: %v", err)
+	}
+	io.ReadAll(reader)
+	reader.Close()
+
+	if _, err := memBucket.PutObject(ctx, testKey, bytes.NewReader(second)); err != nil {
+		t.Fatalf("memory PutObject failed: %v", err)
+	}
+
+	time.Sleep(cacheWideTTL + 20*time.Millisecond)
+
+	reader, _, err = bucket.GetObject(ctx, testKey)
+	if err != nil {
+		t.Fatalf("third GetObject failed: %v", err)
+	}
+	got, _ := io.ReadAll(reader)
+	reader.Close()
+	if !bytes.Equal(got, second) {
+		t.Errorf("after cache-wide TTL: got %q, want refreshed %q", got, second)
+	}
+}

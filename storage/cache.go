@@ -6,6 +6,8 @@ import (
 	"context"
 	"io"
 	"iter"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/firetiger-oss/concurrent"
@@ -116,6 +118,38 @@ func (c *Cache) expireAt() time.Time {
 	return time.Time{}
 }
 
+// effectiveExpireAt returns the expiration time for a cache entry, deriving
+// it from the object's Cache-Control header when a max-age directive is
+// present, and falling back to the cache-wide TTL otherwise. A returned zero
+// time means the entry never expires (the convention used by the underlying
+// TTL cache when no expiration is set).
+func (c *Cache) effectiveExpireAt(info ObjectInfo) time.Time {
+	if d, ok := cacheControlMaxAge(info.CacheControl); ok {
+		return time.Now().Add(d)
+	}
+	return c.expireAt()
+}
+
+// cacheControlMaxAge parses a Cache-Control header value and returns the
+// duration encoded by its `max-age=N` directive (where N is a non-negative
+// integer count of seconds). The second return value is false when no
+// well-formed max-age directive is present. Other directives are ignored.
+func cacheControlMaxAge(header string) (time.Duration, bool) {
+	for _, raw := range strings.Split(header, ",") {
+		directive := strings.TrimSpace(raw)
+		const prefix = "max-age="
+		if !strings.HasPrefix(directive, prefix) {
+			continue
+		}
+		n, err := strconv.ParseInt(directive[len(prefix):], 10, 64)
+		if err != nil || n < 0 {
+			continue
+		}
+		return time.Duration(n) * time.Second, true
+	}
+	return 0, false
+}
+
 // PageSize returns the size of each page in the cache.
 func (c *Cache) PageSize() int64 {
 	return c.pageSize
@@ -166,7 +200,7 @@ func (c *cachedBucket) HeadObject(ctx context.Context, key string) (ObjectInfo, 
 		size := int64(0)
 		size += int64(len(key))
 		size += sizeOfObjectInfo(object)
-		return size, object, c.expireAt(), err
+		return size, object, c.effectiveExpireAt(object), err
 	})
 	return info, err
 }
@@ -251,7 +285,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 						size += int64(len(thisPageKey.object))
 						size += int64(len(object.body))
 						size += sizeOfObjectInfo(object.info)
-						return size, object, c.expireAt(), nil
+						return size, object, c.effectiveExpireAt(info), nil
 					})
 					return obj, err
 				},
@@ -320,7 +354,7 @@ func (c *cachedBucket) GetObject(ctx context.Context, key string, options ...Get
 		size += int64(len(key))
 		size += int64(len(object.body))
 		size += sizeOfObjectInfo(object.info)
-		return size, object, c.expireAt(), nil
+		return size, object, c.effectiveExpireAt(info), nil
 	})
 	if err != nil {
 		return nil, ObjectInfo{}, err
