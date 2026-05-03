@@ -1220,3 +1220,69 @@ func TestBucketPathStyleURI(t *testing.T) {
 		t.Errorf("non-`//` URI: expected 404 from root mount, got nil")
 	}
 }
+
+// TestBucketPathStyleURIWithPrefix verifies the regression from codex
+// review pass 1: a path-style URI with a key portion after `//` —
+// e.g. `http://host/<name>//<sub>/` — must produce a bucket whose
+// requests target `/<name>/<sub>/<key>`, not `/<name>/<sub>/<key>`
+// with a doubled segment or a host that drops the bucket name.
+func TestBucketPathStyleURIWithPrefix(t *testing.T) {
+	ctx := t.Context()
+	backend := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
+	mux.Handle("/named", stripped)
+	mux.Handle("/named/", stripped)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no bucket at root", http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	// LoadBucket on a path-style URI WITH a key portion after `//`.
+	bucket, err := storage.LoadBucket(ctx, server.URL+"/named//sub/")
+	if err != nil {
+		t.Fatalf("LoadBucket: %v", err)
+	}
+
+	if _, err := bucket.PutObject(ctx, "k1", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	// The on-the-wire key must be sub/k1: the bucket is named, the
+	// `sub/` portion was a prefix on the bucket URI.
+	if _, err := backend.HeadObject(ctx, "sub/k1"); err != nil {
+		t.Errorf("backend HeadObject sub/k1: %v (the prefix must be preserved as a key prefix on the named bucket)", err)
+	}
+
+	// Round-trip through the same bucket.
+	reader, _, err := bucket.GetObject(ctx, "k1")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	body, _ := io.ReadAll(reader)
+	reader.Close()
+	if string(body) != "hello" {
+		t.Errorf("GetObject body = %q, want %q", body, "hello")
+	}
+
+	// Listing must reach the named-bucket handler. Today the bucket has
+	// b.host=`http://server/named/sub` and lists hit `/sub/?list-type=2`
+	// (a key path, not a list endpoint), so this exposes the codex P1 bug.
+	gotKeys := []string{}
+	for obj, err := range bucket.ListObjects(ctx) {
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		gotKeys = append(gotKeys, obj.Key)
+	}
+	if len(gotKeys) != 1 || gotKeys[0] != "k1" {
+		t.Errorf("ListObjects keys = %v, want [k1] (key relative to the WithPrefix-adapted bucket)", gotKeys)
+	}
+
+	if err := bucket.DeleteObject(ctx, "k1"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+}

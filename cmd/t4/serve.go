@@ -142,7 +142,10 @@ func parseBucketArgs(args []string) ([]bucketSpec, error) {
 	seen := make(map[string]bool, len(args))
 	for _, arg := range args {
 		name, uri, hasEq := strings.Cut(arg, "=")
-		if hasEq && name != "" && uri != "" && bucketNameRegexp.MatchString(name) {
+		if hasEq && bucketNameRegexp.MatchString(name) {
+			if uri == "" {
+				return nil, fmt.Errorf("invalid bucket argument %q: uri must be non-empty", arg)
+			}
 			if seen[name] {
 				return nil, fmt.Errorf("duplicate bucket name %q", name)
 			}
@@ -151,9 +154,9 @@ func parseBucketArgs(args []string) ([]bucketSpec, error) {
 			namedCount++
 			continue
 		}
-		if hasEq {
-			return nil, fmt.Errorf("invalid bucket argument %q: name must match %s and uri must be non-empty", arg, bucketNameRegexp)
-		}
+		// `=` may legitimately appear in a positional URI (e.g.
+		// `file:///tmp/a=b`); fall through to positional treatment
+		// when the LHS doesn't look like a bucket name.
 		specs = append(specs, bucketSpec{uri: arg})
 	}
 

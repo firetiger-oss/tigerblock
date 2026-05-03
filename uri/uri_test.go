@@ -388,8 +388,10 @@ func TestJoinHTTPPathStyle(t *testing.T) {
 		// No `/` in location: back-compat.
 		{"http", "host", "k1", "http://host/k1"},
 		{"http", "host", "", "http://host"},
-		// Non-http schemes never get the `//` marker.
-		{"s3", "bucket/a", "k", "s3://bucket/a/k"},
+		// Multi-segment locations get the `//` marker for any scheme
+		// (the storage layer relies on this in its scheme-less rejoin
+		// to preserve the bucket-name boundary).
+		{"s3", "bucket/a", "k", "s3://bucket/a//k"},
 	}
 
 	for _, test := range tests {

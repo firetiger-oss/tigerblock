@@ -135,9 +135,12 @@ func Split(uri string) (scheme, location, path string) {
 //
 // Note: for file URIs, the path is always expressed as an absolute reference.
 //
-// For http(s) URIs whose location includes a path segment (multi-bucket
-// path-style addressing), Join inserts `//` between the location and
-// the object key so the result round-trips through Split.
+// When the location contains a path segment (multi-bucket path-style
+// addressing), Join inserts `//` between the location and the object
+// key so the result round-trips through Split for http(s) URIs and so
+// the schemeless form preserves the boundary for the registry layer.
+// Single-segment locations (the common case for s3, gs, file, etc.)
+// are unaffected.
 func Join(scheme, location string, path ...string) string {
 	var uri string
 
@@ -155,7 +158,7 @@ func Join(scheme, location string, path ...string) string {
 		uri = trimLeadingSlashes(b.String())
 	}
 
-	if (scheme == "http" || scheme == "https") && strings.Contains(location, "/") {
+	if strings.Contains(location, "/") {
 		if uri == "" {
 			uri = location + "//"
 		} else {

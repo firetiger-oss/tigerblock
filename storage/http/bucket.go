@@ -37,6 +37,34 @@ func register(scheme string) {
 
 func NewRegistry(scheme string, options ...BucketOption) storage.Registry {
 	return storage.RegistryFunc(func(ctx context.Context, host string) (storage.Bucket, error) {
+		// `//` after the bucket-name suffix marks the boundary
+		// between bucket address and object key for path-style
+		// multi-bucket addressing. Cut directly to bypass uri.Split's
+		// Clean (which would collapse the marker), and skip past the
+		// scheme separator when host arrives scheme-prefixed (the
+		// storage layer rejoin form is schemeless, but direct
+		// callers may pass the full URI).
+		searchStart := 0
+		if i := strings.Index(host, "://"); i >= 0 {
+			searchStart = i + 3
+		}
+		if idx := strings.Index(host[searchStart:], "//"); idx >= 0 {
+			boundary := searchStart + idx
+			bucketLoc := host[:boundary]
+			keyPrefix := host[boundary+2:]
+			bucketHost := bucketLoc
+			if !strings.Contains(bucketLoc, "://") {
+				bucketHost = scheme + "://" + bucketLoc
+			}
+			b := NewBucket(bucketHost, options...)
+			if keyPrefix != "" {
+				if !strings.HasSuffix(keyPrefix, "/") {
+					keyPrefix += "/"
+				}
+				return storage.WithPrefix(keyPrefix).AdaptBucket(b), nil
+			}
+			return b, nil
+		}
 		_, location, prefix := uri.Split(host)
 		return NewBucket(uri.Join(scheme, location, prefix), options...), nil
 	})

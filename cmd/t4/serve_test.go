@@ -55,14 +55,27 @@ func TestParseBucketArgs(t *testing.T) {
 			wantErr: "invalid bucket argument",
 		},
 		{
-			name:    "empty name",
-			args:    []string{"=file:///tmp/a"},
-			wantErr: "invalid bucket argument",
+			// `=file:///x` has no LHS that matches the bucket-name
+			// regex, so it falls through to positional treatment
+			// rather than erroring. Storage layer rejects it later.
+			name:      "leading equals",
+			args:      []string{"=file:///tmp/a"},
+			wantSpecs: []bucketSpec{{uri: "=file:///tmp/a"}},
 		},
 		{
-			name:    "name with slash",
-			args:    []string{"a/b=file:///tmp/a"},
-			wantErr: "invalid bucket argument",
+			// LHS contains `/` so it cannot be a bucket name —
+			// treated as a positional URI.
+			name:      "slash before equals",
+			args:      []string{"a/b=file:///tmp/a"},
+			wantSpecs: []bucketSpec{{uri: "a/b=file:///tmp/a"}},
+		},
+		{
+			// Codex P2 regression: a single bucket URI containing
+			// literal `=` (e.g. a filesystem path) must be accepted
+			// as a positional unnamed URI.
+			name:      "uri with equals",
+			args:      []string{"file:///tmp/a=b"},
+			wantSpecs: []bucketSpec{{uri: "file:///tmp/a=b"}},
 		},
 		{
 			name:    "duplicate name",
