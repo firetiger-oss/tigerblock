@@ -16,10 +16,10 @@ import (
 
 	gcloud "cloud.google.com/go/storage"
 	"github.com/firetiger-oss/concurrent"
-	"github.com/firetiger-oss/tigerblock/internal/sequtil"
-	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/backoff"
 	"github.com/firetiger-oss/tigerblock/cache"
+	"github.com/firetiger-oss/tigerblock/internal/sequtil"
+	"github.com/firetiger-oss/tigerblock/storage"
 	"github.com/firetiger-oss/tigerblock/storage/gs/gsclient"
 	"github.com/firetiger-oss/tigerblock/uri"
 	"google.golang.org/api/googleapi"
