@@ -37,34 +37,6 @@ func register(scheme string) {
 
 func NewRegistry(scheme string, options ...BucketOption) storage.Registry {
 	return storage.RegistryFunc(func(ctx context.Context, host string) (storage.Bucket, error) {
-		// `//` after the bucket-name suffix marks the boundary
-		// between bucket address and object key for path-style
-		// multi-bucket addressing. Cut directly to bypass uri.Split's
-		// Clean (which would collapse the marker), and skip past the
-		// scheme separator when host arrives scheme-prefixed (the
-		// storage layer rejoin form is schemeless, but direct
-		// callers may pass the full URI).
-		searchStart := 0
-		if i := strings.Index(host, "://"); i >= 0 {
-			searchStart = i + 3
-		}
-		if idx := strings.Index(host[searchStart:], "//"); idx >= 0 {
-			boundary := searchStart + idx
-			bucketLoc := host[:boundary]
-			keyPrefix := host[boundary+2:]
-			bucketHost := bucketLoc
-			if !strings.Contains(bucketLoc, "://") {
-				bucketHost = scheme + "://" + bucketLoc
-			}
-			b := NewBucket(bucketHost, options...)
-			if keyPrefix != "" {
-				if !strings.HasSuffix(keyPrefix, "/") {
-					keyPrefix += "/"
-				}
-				return storage.WithPrefix(keyPrefix).AdaptBucket(b), nil
-			}
-			return b, nil
-		}
 		_, location, prefix := uri.Split(host)
 		return NewBucket(uri.Join(scheme, location, prefix), options...), nil
 	})
@@ -121,28 +93,34 @@ func WithBearerToken(token string) BucketOption {
 	}
 }
 
-// WithBasePath appends a path segment to the bucket host so every
-// subsequent request is rooted under it. Useful when the bucket is
-// mounted under a name on a multi-bucket server (e.g. `t4 serve
-// nexus=...` exposes nexus at /nexus/), since the storage URI parser
-// otherwise folds the path into the list-prefix and addresses the
-// server root.
-func WithBasePath(path string) BucketOption {
-	path = strings.Trim(path, "/")
-	return func(b *Bucket) {
-		if path == "" {
-			return
-		}
-		b.host = strings.TrimRight(b.host, "/") + "/" + path
-	}
+// WithBucketName configures the bucket to address itself as a named
+// path-style mount on the host. Requests are sent to
+// `<host>/<name>/<key>` rather than `<host>/<key>`, and the bucket's
+// Location and X-Amz-Copy-Source identifier reflect the configured
+// name. Use this when the bucket is one of many mounted on a
+// multi-bucket server (e.g. `t4 serve named=...`).
+func WithBucketName(name string) BucketOption {
+	name = strings.Trim(name, "/")
+	return func(b *Bucket) { b.name = name }
 }
 
 type Bucket struct {
 	client   *http.Client
 	listType string
 	host     string
+	name     string
 	header   http.Header
 	signer   secret.Signer
+}
+
+// baseURL returns the URL prefix every request is rooted under.
+// For a root-mounted bucket this is just b.host; for a named
+// path-style bucket it includes the bucket name.
+func (b *Bucket) baseURL() string {
+	if b.name == "" {
+		return b.host
+	}
+	return b.host + "/" + b.name
 }
 
 func escapeKey(key string) string {
@@ -154,7 +132,7 @@ func escapeKey(key string) string {
 }
 
 func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	r, err := http.NewRequestWithContext(ctx, method, b.host+"/"+path, body)
+	r, err := http.NewRequestWithContext(ctx, method, b.baseURL()+"/"+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -207,15 +185,7 @@ func (r *bodyReadCloser) Read(b []byte) (int, error) {
 }
 
 func (b *Bucket) Location() string {
-	// Emit the path-style `//` marker when b.host has a path
-	// component so the URI round-trips through uri.Split + Join +
-	// SingleBucketRegistry's identity comparison. The trailing `//`
-	// resolves to the bucket-only path-style form on Split and
-	// matches what Join produces from (scheme, multi-segment-loc).
-	if scheme, host, ok := strings.Cut(b.host, "://"); ok && strings.Contains(host, "/") {
-		return scheme + "://" + host + "//"
-	}
-	return b.host
+	return b.baseURL()
 }
 
 func (b *Bucket) Access(ctx context.Context) error {
@@ -537,19 +507,13 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	}
 	defer req.Body.Close()
 
-	// Derive the bucket identifier for X-Amz-Copy-Source. For a
-	// root-mounted bucket b.host is `scheme://host`, in which case
-	// the bucket name is the host. For a path-style multi-bucket
-	// mount b.host is `scheme://host/<name>` (or deeper), in which
-	// case the bucket name is the last path segment — that's what
-	// the server-side handler matches via StripBucketNamePrefix
-	// and RejectCrossBucketCopy.
-	bucketName := b.host
-	if _, after, ok := strings.Cut(bucketName, "://"); ok {
-		bucketName = after
-	}
-	if i := strings.LastIndex(bucketName, "/"); i >= 0 {
-		bucketName = bucketName[i+1:]
+	// Derive the bucket identifier for X-Amz-Copy-Source. A bucket
+	// constructed with WithBucketName knows its name explicitly; for
+	// a root-mounted bucket the conventional identifier is the
+	// server host.
+	bucketName := b.name
+	if bucketName == "" {
+		_, bucketName, _ = uri.Split(b.host)
 	}
 	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+escapeKey(from))
 

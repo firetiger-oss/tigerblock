@@ -36,28 +36,20 @@ func TestScripts(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir: "testdata/script",
 		Setup: func(env *testscript.Env) error {
-			// One server, two named buckets (mirrors `t4 serve a=... b=...`).
-			// Scripts address them via the path-style URI form
-			// `<server>/<name>//<key>`.
-			dirA := filepath.Join(env.WorkDir, "_storage_a")
-			dirB := filepath.Join(env.WorkDir, "_storage_b")
-			for _, d := range []string{dirA, dirB} {
-				if err := os.MkdirAll(d, 0o755); err != nil {
-					return err
-				}
-			}
-			handler, err := buildBucketMux(ctx, []bucketSpec{
-				{name: "a", uri: "file://" + dirA},
-				{name: "b", uri: "file://" + dirB},
-			})
+			// One root-mounted server per bucket. The http storage
+			// client only addresses buckets at host root via URI;
+			// `WithBucketName` covers the path-mounted case
+			// programmatically.
+			urlA, dirA, err := newSingleBucketServer(ctx, env, "_storage_a")
 			if err != nil {
 				return err
 			}
-			server := httptest.NewServer(handler)
-			env.Defer(server.Close)
-			env.Setenv("BASE_URL", server.URL)
-			env.Setenv("BUCKET_A", server.URL+"/a/")
-			env.Setenv("BUCKET_B", server.URL+"/b/")
+			urlB, dirB, err := newSingleBucketServer(ctx, env, "_storage_b")
+			if err != nil {
+				return err
+			}
+			env.Setenv("BUCKET_A", urlA)
+			env.Setenv("BUCKET_B", urlB)
 			env.Setenv("STORAGE_A", dirA)
 			env.Setenv("STORAGE_B", dirB)
 			return nil
@@ -67,6 +59,20 @@ func TestScripts(t *testing.T) {
 			"ready":    readyCmd,
 		},
 	})
+}
+
+func newSingleBucketServer(ctx context.Context, env *testscript.Env, subdir string) (string, string, error) {
+	dir := filepath.Join(env.WorkDir, subdir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+	handler, err := buildBucketMux(ctx, []bucketSpec{{uri: "file://" + dir}})
+	if err != nil {
+		return "", "", err
+	}
+	server := httptest.NewServer(handler)
+	env.Defer(server.Close)
+	return server.URL, dir, nil
 }
 
 func pickPortCmd(ts *testscript.TestScript, neg bool, args []string) {

@@ -1,6 +1,7 @@
 package uri
 
 import (
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -94,13 +95,6 @@ func expandFilePath(s string) string {
 //
 // Local file paths (starting with /, ./, ../, or ~) are automatically detected
 // and treated as file:// URIs with the path expanded to an absolute path.
-//
-// For http(s) URIs, a `//` in the path acts as a bucket-name/object-key
-// boundary so that path-style multi-bucket servers can be addressed —
-// `http://host/<name>//<key>` parses as location=`host/<name>` and
-// path=`<key>`. URIs without `//` keep the back-compatible behavior of
-// treating the entire path as the object key under a root-mounted
-// bucket.
 func Split(uri string) (scheme, location, path string) {
 	if len(uri) == 0 {
 		return
@@ -115,12 +109,6 @@ func Split(uri string) (scheme, location, path string) {
 			path = uri
 		} else {
 			location, path, _ = strings.Cut(uri, "/")
-			if (scheme == "http" || scheme == "https") && path != "" {
-				if bucketSuffix, key, ok := strings.Cut(path, "//"); ok {
-					location = location + "/" + bucketSuffix
-					path = key
-				}
-			}
 		}
 	} else if isLocalFilePath(uri) {
 		scheme = "file"
@@ -134,13 +122,6 @@ func Split(uri string) (scheme, location, path string) {
 // Join joins the scheme, location, and path into a URI.
 //
 // Note: for file URIs, the path is always expressed as an absolute reference.
-//
-// When the location contains a path segment (multi-bucket path-style
-// addressing), Join inserts `//` between the location and the object
-// key so the result round-trips through Split for http(s) URIs and so
-// the schemeless form preserves the boundary for the registry layer.
-// Single-segment locations (the common case for s3, gs, file, etc.)
-// are unaffected.
 func Join(scheme, location string, path ...string) string {
 	var uri string
 
@@ -158,15 +139,7 @@ func Join(scheme, location string, path ...string) string {
 		uri = trimLeadingSlashes(b.String())
 	}
 
-	if strings.Contains(location, "/") {
-		if uri == "" {
-			uri = location + "//"
-		} else {
-			uri = location + "//" + uri
-		}
-	} else {
-		uri = join2(location, uri)
-	}
+	uri = join2(location, uri)
 	switch scheme {
 	case "":
 	case "file":
@@ -175,6 +148,65 @@ func Join(scheme, location string, path ...string) string {
 		uri = scheme + "://" + uri
 	}
 	return uri
+}
+
+// SplitPathStyle parses a path-style URI of the form
+// `scheme://host/bucket/key`. The first path segment after the host
+// is the bucket name; everything after is the object key (which may
+// contain slashes and may be empty). All segments are returned
+// verbatim — Clean is not applied.
+//
+// Returns an error if the input has no scheme, no `://`, or no host.
+// Trailing slashes on the bucket portion are not preserved when the
+// key is empty.
+//
+// Use this for URIs that unambiguously denote path-style multi-bucket
+// addressing — it is intentionally separate from Split so that the
+// general-purpose URI parser stays scheme-agnostic.
+func SplitPathStyle(s string) (scheme, host, bucket, key string, err error) {
+	sep := strings.Index(s, "://")
+	if sep < 0 {
+		return "", "", "", "", fmt.Errorf("uri: missing scheme in path-style URI %q", s)
+	}
+	scheme = s[:sep]
+	if scheme == "" {
+		return "", "", "", "", fmt.Errorf("uri: empty scheme in path-style URI %q", s)
+	}
+	rest := s[sep+3:]
+	host, pathPart, hasPath := strings.Cut(rest, "/")
+	if host == "" {
+		return "", "", "", "", fmt.Errorf("uri: missing host in path-style URI %q", s)
+	}
+	if !hasPath {
+		return scheme, host, "", "", nil
+	}
+	bucket, key, _ = strings.Cut(pathPart, "/")
+	return scheme, host, bucket, key, nil
+}
+
+// JoinPathStyle constructs a path-style URI of the form
+// `scheme://host/bucket/key`. Empty trailing segments are omitted, so
+// `JoinPathStyle("http","host","","") == "http://host"` and
+// `JoinPathStyle("http","host","b","") == "http://host/b"`.
+func JoinPathStyle(scheme, host, bucket, key string) string {
+	var b strings.Builder
+	b.WriteString(scheme)
+	b.WriteString("://")
+	b.WriteString(host)
+	switch {
+	case bucket != "" && key != "":
+		b.WriteByte('/')
+		b.WriteString(bucket)
+		b.WriteByte('/')
+		b.WriteString(key)
+	case bucket != "":
+		b.WriteByte('/')
+		b.WriteString(bucket)
+	case key != "":
+		b.WriteByte('/')
+		b.WriteString(key)
+	}
+	return b.String()
 }
 
 func join(seq iter.Seq[string]) string {

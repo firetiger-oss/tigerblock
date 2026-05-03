@@ -1057,10 +1057,11 @@ func TestHTTPServerKeyDecodingRaw(t *testing.T) {
 	})
 }
 
-// TestBucketWithBasePath verifies that a bucket constructed with
-// WithBasePath addresses keys under the named mount on a multi-bucket
-// server (mirroring `t4 serve <name>=<uri>`).
-func TestBucketWithBasePath(t *testing.T) {
+// TestBucketWithBucketName verifies that a bucket constructed with
+// WithBucketName addresses keys under the named mount on a
+// multi-bucket server (mirroring `t4 serve <name>=<uri>`). This is
+// the explicit programmatic API for path-style addressing.
+func TestBucketWithBucketName(t *testing.T) {
 	ctx := t.Context()
 	backend := new(memory.Bucket)
 
@@ -1075,7 +1076,11 @@ func TestBucketWithBasePath(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	bucket := storagehttp.NewBucket(server.URL, storagehttp.WithBasePath("named"))
+	bucket := storagehttp.NewBucket(server.URL, storagehttp.WithBucketName("named"))
+
+	if got := bucket.Location(); got != server.URL+"/named" {
+		t.Errorf("Location() = %q, want %q", got, server.URL+"/named")
+	}
 
 	if _, err := bucket.PutObject(ctx, "k1", strings.NewReader("hello")); err != nil {
 		t.Fatalf("PutObject: %v", err)
@@ -1109,221 +1114,37 @@ func TestBucketWithBasePath(t *testing.T) {
 		t.Errorf("ListObjects keys = %v, want [k1]", gotKeys)
 	}
 
-	// Sanity-check that the key actually landed in the named-mounted
-	// memory backend, not at root.
+	// The key actually landed in the named-mounted backend, not at root.
 	if _, err := backend.HeadObject(ctx, "k1"); err != nil {
 		t.Errorf("backend HeadObject k1 missing: %v", err)
 	}
 
+	// Same-bucket copy round-trip works (X-Amz-Copy-Source uses the
+	// configured bucket name, which the server-side strip middleware
+	// matches).
+	if err := bucket.CopyObject(ctx, "k1", "k1-copy"); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	if _, err := backend.HeadObject(ctx, "k1-copy"); err != nil {
+		t.Errorf("backend HeadObject k1-copy missing: %v", err)
+	}
+
 	if err := bucket.DeleteObject(ctx, "k1"); err != nil {
 		t.Fatalf("DeleteObject: %v", err)
 	}
+	if err := bucket.DeleteObject(ctx, "k1-copy"); err != nil {
+		t.Fatalf("DeleteObject k1-copy: %v", err)
+	}
 
-	// Without WithBasePath, requests would hit "/" which our mux returns
-	// 404 for; verify by running the same flow without the option.
+	// Without WithBucketName, requests would hit "/" which our mux
+	// returns 404 for; verify by running the same flow without the
+	// option.
 	rootBucket := storagehttp.NewBucket(server.URL)
 	if _, err := rootBucket.PutObject(ctx, "k2", strings.NewReader("nope")); err == nil {
-		t.Errorf("PutObject without base path: expected error from root mount, got nil")
+		t.Errorf("PutObject without bucket name: expected error from root mount, got nil")
 	}
 }
 
-// TestBucketPathStyleURI verifies that path-style multi-bucket
-// addressing via the `http://host/<name>//<key>` URI form works
-// end-to-end through the public storage API (LoadBucket + Head/Get/Put/
-// List/Delete), not just via the programmatic NewBucket+WithBasePath
-// constructor.
-func TestBucketPathStyleURI(t *testing.T) {
-	ctx := t.Context()
-
-	bucketA := new(memory.Bucket)
-	bucketB := new(memory.Bucket)
-
-	mux := http.NewServeMux()
-	for name, b := range map[string]*memory.Bucket{"a": bucketA, "b": bucketB} {
-		stripped := storagehttp.StripBucketNamePrefix(name, storagehttp.BucketHandler(b))
-		mux.Handle("/"+name, stripped)
-		mux.Handle("/"+name+"/", stripped)
-	}
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no bucket at root", http.StatusNotFound)
-	})
-
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	keyURI := func(name, key string) string {
-		return server.URL + "/" + name + "//" + key
-	}
-	bucketURI := func(name string) string {
-		return server.URL + "/" + name + "//"
-	}
-
-	if _, err := storage.PutObject(ctx, keyURI("a", "k1"), strings.NewReader("hello")); err != nil {
-		t.Fatalf("PutObject: %v", err)
-	}
-
-	reader, info, err := storage.GetObject(ctx, keyURI("a", "k1"))
-	if err != nil {
-		t.Fatalf("GetObject: %v", err)
-	}
-	body, _ := io.ReadAll(reader)
-	reader.Close()
-	if string(body) != "hello" {
-		t.Errorf("GetObject body = %q, want %q", body, "hello")
-	}
-	if info.Size != 5 {
-		t.Errorf("GetObject size = %d, want 5", info.Size)
-	}
-
-	if _, err := storage.HeadObject(ctx, keyURI("a", "k1")); err != nil {
-		t.Fatalf("HeadObject: %v", err)
-	}
-
-	gotKeys := []string{}
-	for obj, err := range storage.ListObjects(ctx, bucketURI("a")) {
-		if err != nil {
-			t.Fatalf("ListObjects: %v", err)
-		}
-		gotKeys = append(gotKeys, obj.Key)
-	}
-	if len(gotKeys) != 1 || !strings.HasSuffix(gotKeys[0], "//k1") {
-		t.Errorf("ListObjects keys = %v, want [.../a//k1]", gotKeys)
-	}
-
-	// Bucket isolation: a's key is not visible in b.
-	if _, err := storage.HeadObject(ctx, keyURI("b", "k1")); err == nil {
-		t.Errorf("HeadObject on bucket b: expected error, got nil")
-	}
-
-	// Sub-key prefixes work too.
-	if _, err := storage.PutObject(ctx, keyURI("a", "sub/k2"), strings.NewReader("nested")); err != nil {
-		t.Fatalf("PutObject sub: %v", err)
-	}
-	subKeys := []string{}
-	for obj, err := range storage.ListObjects(ctx, server.URL+"/a//sub/") {
-		if err != nil {
-			t.Fatalf("ListObjects sub: %v", err)
-		}
-		subKeys = append(subKeys, obj.Key)
-	}
-	if len(subKeys) != 1 || !strings.HasSuffix(subKeys[0], "//sub/k2") {
-		t.Errorf("ListObjects sub keys = %v", subKeys)
-	}
-
-	if err := storage.DeleteObject(ctx, keyURI("a", "k1")); err != nil {
-		t.Fatalf("DeleteObject: %v", err)
-	}
-
-	// Back-compat: a non-`//` URI still routes via the root (which we've
-	// configured to 404), confirming the old semantics are unchanged.
-	if _, err := storage.HeadObject(ctx, server.URL+"/a/k1"); err == nil {
-		t.Errorf("non-`//` URI: expected 404 from root mount, got nil")
-	}
-}
-
-// TestBucketPathStyleURIWithPrefix verifies the regression from codex
-// review pass 1: a path-style URI with a key portion after `//` —
-// e.g. `http://host/<name>//<sub>/` — must produce a bucket whose
-// requests target `/<name>/<sub>/<key>`, not `/<name>/<sub>/<key>`
-// with a doubled segment or a host that drops the bucket name.
-func TestBucketPathStyleURIWithPrefix(t *testing.T) {
-	ctx := t.Context()
-	backend := new(memory.Bucket)
-
-	mux := http.NewServeMux()
-	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
-	mux.Handle("/named", stripped)
-	mux.Handle("/named/", stripped)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no bucket at root", http.StatusNotFound)
-	})
-
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	// LoadBucket on a path-style URI WITH a key portion after `//`.
-	bucket, err := storage.LoadBucket(ctx, server.URL+"/named//sub/")
-	if err != nil {
-		t.Fatalf("LoadBucket: %v", err)
-	}
-
-	if _, err := bucket.PutObject(ctx, "k1", strings.NewReader("hello")); err != nil {
-		t.Fatalf("PutObject: %v", err)
-	}
-
-	// The on-the-wire key must be sub/k1: the bucket is named, the
-	// `sub/` portion was a prefix on the bucket URI.
-	if _, err := backend.HeadObject(ctx, "sub/k1"); err != nil {
-		t.Errorf("backend HeadObject sub/k1: %v (the prefix must be preserved as a key prefix on the named bucket)", err)
-	}
-
-	// Round-trip through the same bucket.
-	reader, _, err := bucket.GetObject(ctx, "k1")
-	if err != nil {
-		t.Fatalf("GetObject: %v", err)
-	}
-	body, _ := io.ReadAll(reader)
-	reader.Close()
-	if string(body) != "hello" {
-		t.Errorf("GetObject body = %q, want %q", body, "hello")
-	}
-
-	// Listing must reach the named-bucket handler. Today the bucket has
-	// b.host=`http://server/named/sub` and lists hit `/sub/?list-type=2`
-	// (a key path, not a list endpoint), so this exposes the codex P1 bug.
-	gotKeys := []string{}
-	for obj, err := range bucket.ListObjects(ctx) {
-		if err != nil {
-			t.Fatalf("ListObjects: %v", err)
-		}
-		gotKeys = append(gotKeys, obj.Key)
-	}
-	if len(gotKeys) != 1 || gotKeys[0] != "k1" {
-		t.Errorf("ListObjects keys = %v, want [k1] (key relative to the WithPrefix-adapted bucket)", gotKeys)
-	}
-
-	if err := bucket.DeleteObject(ctx, "k1"); err != nil {
-		t.Fatalf("DeleteObject: %v", err)
-	}
-}
-
-// TestPathStyleHTTPBucketSingleBucketRegistry verifies the regression
-// from codex review pass 2: a path-style HTTP bucket wrapped in
-// storage.SingleBucketRegistry must round-trip through the registry's
-// location comparison. Previously uri.Join with a multi-segment
-// location and empty path emitted a `//` marker that bucket.Location()
-// did not, causing the comparison to fail with ErrBucketNotFound.
-func TestPathStyleHTTPBucketSingleBucketRegistry(t *testing.T) {
-	ctx := t.Context()
-	backend := new(memory.Bucket)
-
-	mux := http.NewServeMux()
-	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
-	mux.Handle("/named", stripped)
-	mux.Handle("/named/", stripped)
-
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	bucket, err := storage.LoadBucket(ctx, server.URL+"/named//")
-	if err != nil {
-		t.Fatalf("LoadBucket: %v", err)
-	}
-
-	registry := storage.SingleBucketRegistry(bucket)
-	if _, err := storage.PutObjectAt(ctx, registry, server.URL+"/named//k1", strings.NewReader("hello")); err != nil {
-		t.Fatalf("PutObjectAt via SingleBucketRegistry: %v", err)
-	}
-
-	if _, err := storage.HeadObjectAt(ctx, registry, server.URL+"/named//k1"); err != nil {
-		t.Fatalf("HeadObjectAt via SingleBucketRegistry: %v", err)
-	}
-}
-
-// TestNamedServeRejectsCrossBucketCopy verifies the regression from
-// codex review pass 2: in multi-bucket mode each backend handler is
-// isolated, so a PUT /a/dst with X-Amz-Copy-Source: /b/src must be
-// rejected (it cannot reach bucket b). Today it silently calls
 // bucket.CopyObject("src", "dst") on bucket a.
 func TestNamedServeRejectsCrossBucketCopy(t *testing.T) {
 	ctx := t.Context()
@@ -1367,42 +1188,5 @@ func TestNamedServeRejectsCrossBucketCopy(t *testing.T) {
 	}
 	if res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusBadRequest {
 		t.Errorf("PUT /a/dst with cross-bucket copy: status %d, want 403 or 400; body=%s", res.StatusCode, body)
-	}
-}
-
-// TestNamedServeAllowsSameBucketCopy verifies the regression from
-// codex review pass 3: a CopyObject between two keys in the same
-// path-style bucket must succeed. Previously the http client sent
-// `X-Amz-Copy-Source: /<host>/<key>` (deriving the bucket from
-// b.host without the path segment), which the named-mount
-// RejectCrossBucketCopy middleware then rejected as cross-bucket.
-func TestNamedServeAllowsSameBucketCopy(t *testing.T) {
-	ctx := t.Context()
-	backend := new(memory.Bucket)
-
-	mux := http.NewServeMux()
-	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
-	guarded := storagehttp.RejectCrossBucketCopy("named", stripped)
-	mux.Handle("/named", guarded)
-	mux.Handle("/named/", guarded)
-
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	if _, err := storage.PutObject(ctx, server.URL+"/named//src", strings.NewReader("hello")); err != nil {
-		t.Fatalf("PutObject src: %v", err)
-	}
-	if err := storage.CopyObject(ctx, server.URL+"/named//src", server.URL+"/named//dst"); err != nil {
-		t.Fatalf("CopyObject same-bucket: %v", err)
-	}
-
-	reader, _, err := storage.GetObject(ctx, server.URL+"/named//dst")
-	if err != nil {
-		t.Fatalf("GetObject dst: %v", err)
-	}
-	body, _ := io.ReadAll(reader)
-	reader.Close()
-	if string(body) != "hello" {
-		t.Errorf("dst body = %q, want %q", body, "hello")
 	}
 }
