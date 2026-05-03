@@ -24,8 +24,8 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/storage"
-	"github.com/firetiger-oss/tigerblock/storage/backoff"
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/backoff"
+	"github.com/firetiger-oss/tigerblock/cache"
 	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
 	"github.com/firetiger-oss/tigerblock/uri"
 )

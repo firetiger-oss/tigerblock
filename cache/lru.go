@@ -3,7 +3,7 @@ package cache
 import (
 	"sync"
 
-	"github.com/firetiger-oss/tigerblock/storage/cache/lru"
+	"github.com/firetiger-oss/tigerblock/cache/lru"
 )
 
 var ready = make(chan struct{})

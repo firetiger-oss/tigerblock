@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage/backoff"
+	"github.com/firetiger-oss/tigerblock/backoff"
 )
 
 // WatchObjects provides a generic implementation of watching for changes to objects

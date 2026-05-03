@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage/backoff"
+	"github.com/firetiger-oss/tigerblock/backoff"
 )
 
 func TestExponentialBackoff(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	"github.com/firetiger-oss/tigerblock/secret"
 	"github.com/firetiger-oss/tigerblock/secret/authn"
 	"github.com/firetiger-oss/tigerblock/storage"
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
 
 	_ "github.com/firetiger-oss/tigerblock/secret/aws"

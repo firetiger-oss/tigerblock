@@ -112,14 +112,14 @@ var (
 
 ## Supporting Packages
 
-### storage/cache/
+### cache/
 Caching implementations:
 - `Cache[K,V]` - Generic cache with singleflight deduplication
 - `SeqCache[K,V]` - Iterator-aware caching for `iter.Seq2`
 - `LRU[K,V]` - LRU cache with promise-based async loading
 - `TTL[K,V]` - LRU with time-to-live expiration
 
-### storage/backoff/
+### backoff/
 Retry logic:
 - `Exponential()` - Exponential backoff strategy (100ms → 200ms → 400ms...)
 - `FullJitter(strategy)` - Adds randomization to prevent thundering herd
@@ -203,6 +203,9 @@ CLI tool (`t4`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
 
 ```
 /
+├── backoff/                # Retry strategies
+├── cache/                  # Cache implementations
+│   └── lru/                # LRU primitive
 ├── storage/                # Storage abstraction (package storage)
 │   ├── storage.go          # Main interface and global functions
 │   ├── options.go          # Option types (Get, Put, List)
@@ -217,8 +220,6 @@ CLI tool (`t4`) with subcommands `cp`, `ls`, `rm`, `serve`, `stat`.
 │   ├── instrument.go       # OpenTelemetry instrumentation
 │   ├── log.go              # Structured logging adapter
 │   ├── file.go             # fs.FS interface for buckets
-│   ├── backoff/            # Retry strategies
-│   ├── cache/              # Cache implementations
 │   ├── file/               # File system backend
 │   ├── fuse/               # FUSE mount backend
 │   ├── gs/                 # Google Cloud Storage backend

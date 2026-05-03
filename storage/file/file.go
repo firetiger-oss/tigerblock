@@ -23,7 +23,7 @@ import (
 
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/storage"
-	"github.com/firetiger-oss/tigerblock/storage/backoff"
+	"github.com/firetiger-oss/tigerblock/backoff"
 	"github.com/fsnotify/fsnotify"
 	"golang.org/x/sys/unix"
 )

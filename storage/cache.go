@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/firetiger-oss/concurrent"
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 	"go.opentelemetry.io/otel/metric"
 )
 

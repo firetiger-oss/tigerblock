@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 	"github.com/firetiger-oss/tigerblock/uri"
 )
 
