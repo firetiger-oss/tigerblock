@@ -300,3 +300,125 @@ func TestJoinPreservesTrailingSlash(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitHTTPPathStyle(t *testing.T) {
+	tests := []struct {
+		uri      string
+		scheme   string
+		location string
+		path     string
+	}{
+		{
+			uri:      "http://host/named//k1",
+			scheme:   "http",
+			location: "host/named",
+			path:     "k1",
+		},
+		{
+			uri:      "https://host:8080/named//sub/k",
+			scheme:   "https",
+			location: "host:8080/named",
+			path:     "sub/k",
+		},
+		{
+			uri:      "http://host/named//",
+			scheme:   "http",
+			location: "host/named",
+			path:     "",
+		},
+		{
+			uri:      "http://host/a/b//k",
+			scheme:   "http",
+			location: "host/a/b",
+			path:     "k",
+		},
+		{
+			// No `//`: back-compat. Whole path is the object key
+			// under the root-mounted bucket.
+			uri:      "http://host/named/k1",
+			scheme:   "http",
+			location: "host",
+			path:     "named/k1",
+		},
+		{
+			uri:      "http://host/k1",
+			scheme:   "http",
+			location: "host",
+			path:     "k1",
+		},
+		{
+			// `//` boundary applies to https too.
+			uri:      "https://host/a//k",
+			scheme:   "https",
+			location: "host/a",
+			path:     "k",
+		},
+		{
+			// `//` boundary does not apply to non-http schemes.
+			uri:      "s3://bucket/a//k",
+			scheme:   "s3",
+			location: "bucket",
+			path:     "a/k",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.uri, func(t *testing.T) {
+			scheme, location, path := uri.Split(test.uri)
+			if scheme != test.scheme || location != test.location || path != test.path {
+				t.Fatalf("Split(%q) = (%q, %q, %q), want (%q, %q, %q)",
+					test.uri, scheme, location, path,
+					test.scheme, test.location, test.path)
+			}
+		})
+	}
+}
+
+func TestJoinHTTPPathStyle(t *testing.T) {
+	tests := []struct {
+		scheme   string
+		location string
+		path     string
+		uri      string
+	}{
+		{"http", "host/named", "k1", "http://host/named//k1"},
+		{"http", "host/named", "", "http://host/named//"},
+		{"http", "host/named", "sub/k", "http://host/named//sub/k"},
+		{"https", "host:8080/a", "k", "https://host:8080/a//k"},
+		// No `/` in location: back-compat.
+		{"http", "host", "k1", "http://host/k1"},
+		{"http", "host", "", "http://host"},
+		// Non-http schemes never get the `//` marker.
+		{"s3", "bucket/a", "k", "s3://bucket/a/k"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.uri, func(t *testing.T) {
+			got := uri.Join(test.scheme, test.location, test.path)
+			if got != test.uri {
+				t.Fatalf("Join(%q, %q, %q) = %q, want %q",
+					test.scheme, test.location, test.path, got, test.uri)
+			}
+		})
+	}
+}
+
+func TestSplitJoinRoundTripHTTPPathStyle(t *testing.T) {
+	uris := []string{
+		"http://host/named//k1",
+		"http://host/named//",
+		"http://host/named//sub/k",
+		"https://host:8080/a/b//k",
+		"http://host/k1",
+		"http://host",
+	}
+	for _, in := range uris {
+		t.Run(in, func(t *testing.T) {
+			scheme, location, path := uri.Split(in)
+			out := uri.Join(scheme, location, path)
+			if out != in {
+				t.Fatalf("round-trip mismatch: %q -> Split -> Join -> %q", in, out)
+			}
+		})
+	}
+}

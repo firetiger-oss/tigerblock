@@ -1056,3 +1056,167 @@ func TestHTTPServerKeyDecodingRaw(t *testing.T) {
 		}
 	})
 }
+
+// TestBucketWithBasePath verifies that a bucket constructed with
+// WithBasePath addresses keys under the named mount on a multi-bucket
+// server (mirroring `t4 serve <name>=<uri>`).
+func TestBucketWithBasePath(t *testing.T) {
+	ctx := t.Context()
+	backend := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
+	mux.Handle("/named", stripped)
+	mux.Handle("/named/", stripped)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no bucket at root", http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	bucket := storagehttp.NewBucket(server.URL, storagehttp.WithBasePath("named"))
+
+	if _, err := bucket.PutObject(ctx, "k1", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	reader, info, err := bucket.GetObject(ctx, "k1")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	body, _ := io.ReadAll(reader)
+	reader.Close()
+	if string(body) != "hello" {
+		t.Errorf("GetObject body = %q, want %q", body, "hello")
+	}
+	if info.Size != 5 {
+		t.Errorf("GetObject size = %d, want 5", info.Size)
+	}
+
+	if _, err := bucket.HeadObject(ctx, "k1"); err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+
+	gotKeys := []string{}
+	for obj, err := range bucket.ListObjects(ctx) {
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		gotKeys = append(gotKeys, obj.Key)
+	}
+	if len(gotKeys) != 1 || gotKeys[0] != "k1" {
+		t.Errorf("ListObjects keys = %v, want [k1]", gotKeys)
+	}
+
+	// Sanity-check that the key actually landed in the named-mounted
+	// memory backend, not at root.
+	if _, err := backend.HeadObject(ctx, "k1"); err != nil {
+		t.Errorf("backend HeadObject k1 missing: %v", err)
+	}
+
+	if err := bucket.DeleteObject(ctx, "k1"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+
+	// Without WithBasePath, requests would hit "/" which our mux returns
+	// 404 for; verify by running the same flow without the option.
+	rootBucket := storagehttp.NewBucket(server.URL)
+	if _, err := rootBucket.PutObject(ctx, "k2", strings.NewReader("nope")); err == nil {
+		t.Errorf("PutObject without base path: expected error from root mount, got nil")
+	}
+}
+
+// TestBucketPathStyleURI verifies that path-style multi-bucket
+// addressing via the `http://host/<name>//<key>` URI form works
+// end-to-end through the public storage API (LoadBucket + Head/Get/Put/
+// List/Delete), not just via the programmatic NewBucket+WithBasePath
+// constructor.
+func TestBucketPathStyleURI(t *testing.T) {
+	ctx := t.Context()
+
+	bucketA := new(memory.Bucket)
+	bucketB := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	for name, b := range map[string]*memory.Bucket{"a": bucketA, "b": bucketB} {
+		stripped := storagehttp.StripBucketNamePrefix(name, storagehttp.BucketHandler(b))
+		mux.Handle("/"+name, stripped)
+		mux.Handle("/"+name+"/", stripped)
+	}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no bucket at root", http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	keyURI := func(name, key string) string {
+		return server.URL + "/" + name + "//" + key
+	}
+	bucketURI := func(name string) string {
+		return server.URL + "/" + name + "//"
+	}
+
+	if _, err := storage.PutObject(ctx, keyURI("a", "k1"), strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	reader, info, err := storage.GetObject(ctx, keyURI("a", "k1"))
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	body, _ := io.ReadAll(reader)
+	reader.Close()
+	if string(body) != "hello" {
+		t.Errorf("GetObject body = %q, want %q", body, "hello")
+	}
+	if info.Size != 5 {
+		t.Errorf("GetObject size = %d, want 5", info.Size)
+	}
+
+	if _, err := storage.HeadObject(ctx, keyURI("a", "k1")); err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+
+	gotKeys := []string{}
+	for obj, err := range storage.ListObjects(ctx, bucketURI("a")) {
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		gotKeys = append(gotKeys, obj.Key)
+	}
+	if len(gotKeys) != 1 || !strings.HasSuffix(gotKeys[0], "//k1") {
+		t.Errorf("ListObjects keys = %v, want [.../a//k1]", gotKeys)
+	}
+
+	// Bucket isolation: a's key is not visible in b.
+	if _, err := storage.HeadObject(ctx, keyURI("b", "k1")); err == nil {
+		t.Errorf("HeadObject on bucket b: expected error, got nil")
+	}
+
+	// Sub-key prefixes work too.
+	if _, err := storage.PutObject(ctx, keyURI("a", "sub/k2"), strings.NewReader("nested")); err != nil {
+		t.Fatalf("PutObject sub: %v", err)
+	}
+	subKeys := []string{}
+	for obj, err := range storage.ListObjects(ctx, server.URL+"/a//sub/") {
+		if err != nil {
+			t.Fatalf("ListObjects sub: %v", err)
+		}
+		subKeys = append(subKeys, obj.Key)
+	}
+	if len(subKeys) != 1 || !strings.HasSuffix(subKeys[0], "//sub/k2") {
+		t.Errorf("ListObjects sub keys = %v", subKeys)
+	}
+
+	if err := storage.DeleteObject(ctx, keyURI("a", "k1")); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+
+	// Back-compat: a non-`//` URI still routes via the root (which we've
+	// configured to 404), confirming the old semantics are unchanged.
+	if _, err := storage.HeadObject(ctx, server.URL+"/a/k1"); err == nil {
+		t.Errorf("non-`//` URI: expected 404 from root mount, got nil")
+	}
+}

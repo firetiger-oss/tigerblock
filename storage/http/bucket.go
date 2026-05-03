@@ -93,6 +93,22 @@ func WithBearerToken(token string) BucketOption {
 	}
 }
 
+// WithBasePath appends a path segment to the bucket host so every
+// subsequent request is rooted under it. Useful when the bucket is
+// mounted under a name on a multi-bucket server (e.g. `t4 serve
+// nexus=...` exposes nexus at /nexus/), since the storage URI parser
+// otherwise folds the path into the list-prefix and addresses the
+// server root.
+func WithBasePath(path string) BucketOption {
+	path = strings.Trim(path, "/")
+	return func(b *Bucket) {
+		if path == "" {
+			return
+		}
+		b.host = strings.TrimRight(b.host, "/") + "/" + path
+	}
+}
+
 type Bucket struct {
 	client   *http.Client
 	listType string

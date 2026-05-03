@@ -94,6 +94,13 @@ func expandFilePath(s string) string {
 //
 // Local file paths (starting with /, ./, ../, or ~) are automatically detected
 // and treated as file:// URIs with the path expanded to an absolute path.
+//
+// For http(s) URIs, a `//` in the path acts as a bucket-name/object-key
+// boundary so that path-style multi-bucket servers can be addressed —
+// `http://host/<name>//<key>` parses as location=`host/<name>` and
+// path=`<key>`. URIs without `//` keep the back-compatible behavior of
+// treating the entire path as the object key under a root-mounted
+// bucket.
 func Split(uri string) (scheme, location, path string) {
 	if len(uri) == 0 {
 		return
@@ -108,6 +115,12 @@ func Split(uri string) (scheme, location, path string) {
 			path = uri
 		} else {
 			location, path, _ = strings.Cut(uri, "/")
+			if (scheme == "http" || scheme == "https") && path != "" {
+				if bucketSuffix, key, ok := strings.Cut(path, "//"); ok {
+					location = location + "/" + bucketSuffix
+					path = key
+				}
+			}
 		}
 	} else if isLocalFilePath(uri) {
 		scheme = "file"
@@ -121,6 +134,10 @@ func Split(uri string) (scheme, location, path string) {
 // Join joins the scheme, location, and path into a URI.
 //
 // Note: for file URIs, the path is always expressed as an absolute reference.
+//
+// For http(s) URIs whose location includes a path segment (multi-bucket
+// path-style addressing), Join inserts `//` between the location and
+// the object key so the result round-trips through Split.
 func Join(scheme, location string, path ...string) string {
 	var uri string
 
@@ -138,7 +155,15 @@ func Join(scheme, location string, path ...string) string {
 		uri = trimLeadingSlashes(b.String())
 	}
 
-	uri = join2(location, uri)
+	if (scheme == "http" || scheme == "https") && strings.Contains(location, "/") {
+		if uri == "" {
+			uri = location + "//"
+		} else {
+			uri = location + "//" + uri
+		}
+	} else {
+		uri = join2(location, uri)
+	}
 	switch scheme {
 	case "":
 	case "file":
