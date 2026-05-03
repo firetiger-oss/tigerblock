@@ -196,7 +196,7 @@ func buildBucketMux(ctx context.Context, specs []bucketSpec, handlerOpts ...stor
 			return nil, fmt.Errorf("loading bucket %q: %w", b.name, err)
 		}
 		h := storagehttp.StripBucketNamePrefix(b.name, storagehttp.BucketHandler(bucket, handlerOpts...))
-		h = storagehttp.RejectCrossBucketCopy(b.name, h)
+		h = rejectCrossBucketCopy(b.name, h)
 		mux.Handle("/"+b.name, h)
 		mux.Handle("/"+b.name+"/", h)
 		names = append(names, b.name)
@@ -213,6 +213,31 @@ func buildBucketMux(ctx context.Context, specs []bucketSpec, handlerOpts ...stor
 	})
 
 	return mux, nil
+}
+
+// rejectCrossBucketCopy guards a named-bucket handler against PUT
+// requests carrying X-Amz-Copy-Source headers that point at a
+// different bucket. Each named-mode handler only sees its own
+// backend, so without this guard a request like
+// `PUT /a/dst` with `X-Amz-Copy-Source: /b/src` would silently be
+// served as a same-bucket copy from a's `src`. We answer 403
+// AccessDenied at the mux layer instead.
+func rejectCrossBucketCopy(bucketName string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
+				src := strings.TrimPrefix(cs, "/")
+				srcBucket, _, _ := strings.Cut(src, "/")
+				if srcBucket != bucketName {
+					storagehttp.Error(w, "AccessDenied",
+						fmt.Sprintf("Cross-bucket copy not supported: source bucket %q does not match %q", srcBucket, bucketName),
+						cs, http.StatusForbidden)
+					return
+				}
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func runServe(cmd *cobra.Command, args []string) error {

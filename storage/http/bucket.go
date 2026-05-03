@@ -515,7 +515,7 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	if bucketName == "" {
 		_, bucketName, _ = uri.Split(b.host)
 	}
-	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+escapeKey(from))
+	req.Header.Set("X-Amz-Copy-Source", uri.JoinPathStyle("", "", bucketName, escapeKey(from)))
 
 	putOptions := storage.NewPutOptions(options...)
 	setHeaderIfNotEmpty(req.Header, "Cache-Control", putOptions.CacheControl())

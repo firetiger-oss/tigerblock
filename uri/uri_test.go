@@ -367,6 +367,13 @@ func TestJoinPathStyle(t *testing.T) {
 		{name: "key only", scheme: "http", host: "host", key: "k", want: "http://host/k"},
 		{name: "key with slashes", scheme: "http", host: "host", bucket: "b", key: "sub/k", want: "http://host/b/sub/k"},
 		{name: "host with port", scheme: "https", host: "h:8080", bucket: "b", key: "k", want: "https://h:8080/b/k"},
+		// Schemeless form: omits the `scheme://` prefix entirely.
+		// Useful for building S3-style `/bucket/key` resource paths
+		// like the X-Amz-Copy-Source header.
+		{name: "schemeless bucket key", bucket: "b", key: "k", want: "/b/k"},
+		{name: "schemeless bucket only", bucket: "b", want: "/b"},
+		{name: "schemeless key with slashes", bucket: "b", key: "sub/k", want: "/b/sub/k"},
+		{name: "all empty", want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

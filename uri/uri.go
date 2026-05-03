@@ -188,10 +188,17 @@ func SplitPathStyle(s string) (scheme, host, bucket, key string, err error) {
 // `scheme://host/bucket/key`. Empty trailing segments are omitted, so
 // `JoinPathStyle("http","host","","") == "http://host"` and
 // `JoinPathStyle("http","host","b","") == "http://host/b"`.
+//
+// When `scheme` is empty the `scheme://` prefix is omitted entirely,
+// which is convenient for building S3-style `/bucket/key` resource
+// paths (e.g. `X-Amz-Copy-Source`):
+// `JoinPathStyle("","","b","k") == "/b/k"`.
 func JoinPathStyle(scheme, host, bucket, key string) string {
 	var b strings.Builder
-	b.WriteString(scheme)
-	b.WriteString("://")
+	if scheme != "" {
+		b.WriteString(scheme)
+		b.WriteString("://")
+	}
 	b.WriteString(host)
 	switch {
 	case bucket != "" && key != "":

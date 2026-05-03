@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -298,4 +300,56 @@ func TestBuildBucketMux(t *testing.T) {
 			t.Errorf("GET /k1 body = %q, want %q", body, "hello")
 		}
 	})
+}
+
+// TestBuildBucketMuxRejectsCrossBucketCopy verifies that in named
+// (multi-bucket) mode, a PUT carrying X-Amz-Copy-Source pointing at a
+// different bucket is rejected at the mux layer rather than silently
+// served as a same-bucket copy. Each bucket's downstream handler only
+// sees its own backend, so without this guard `PUT /a/dst` with
+// `X-Amz-Copy-Source: /b/src` would copy from a's `src` (if it
+// exists) instead of failing.
+func TestBuildBucketMuxRejectsCrossBucketCopy(t *testing.T) {
+	ctx := t.Context()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	// Seed bucket a with key "src" so the buggy behavior would
+	// silently succeed by copying from a's "src" instead of b's.
+	if err := os.WriteFile(filepath.Join(dirA, "src"), []byte("from-a"), 0o644); err != nil {
+		t.Fatalf("seed a/src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirB, "src"), []byte("from-b"), 0o644); err != nil {
+		t.Fatalf("seed b/src: %v", err)
+	}
+
+	handler, err := buildBucketMux(ctx, []bucketSpec{
+		{name: "a", uri: "file://" + dirA},
+		{name: "b", uri: "file://" + dirB},
+	})
+	if err != nil {
+		t.Fatalf("buildBucketMux: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/a/dst", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Amz-Copy-Source", "/b/src")
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+
+	if res.StatusCode == http.StatusOK {
+		t.Fatalf("PUT /a/dst with X-Amz-Copy-Source: /b/src succeeded; expected error. body=%s", body)
+	}
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("PUT /a/dst with cross-bucket copy: status %d, want 403; body=%s", res.StatusCode, body)
+	}
 }
