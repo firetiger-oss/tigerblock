@@ -537,8 +537,20 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	}
 	defer req.Body.Close()
 
-	// Extract bucket name from host URL for x-amz-copy-source header
-	_, bucketName, _ := uri.Split(b.host)
+	// Derive the bucket identifier for X-Amz-Copy-Source. For a
+	// root-mounted bucket b.host is `scheme://host`, in which case
+	// the bucket name is the host. For a path-style multi-bucket
+	// mount b.host is `scheme://host/<name>` (or deeper), in which
+	// case the bucket name is the last path segment — that's what
+	// the server-side handler matches via StripBucketNamePrefix
+	// and RejectCrossBucketCopy.
+	bucketName := b.host
+	if _, after, ok := strings.Cut(bucketName, "://"); ok {
+		bucketName = after
+	}
+	if i := strings.LastIndex(bucketName, "/"); i >= 0 {
+		bucketName = bucketName[i+1:]
+	}
 	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+escapeKey(from))
 
 	putOptions := storage.NewPutOptions(options...)

@@ -1369,3 +1369,40 @@ func TestNamedServeRejectsCrossBucketCopy(t *testing.T) {
 		t.Errorf("PUT /a/dst with cross-bucket copy: status %d, want 403 or 400; body=%s", res.StatusCode, body)
 	}
 }
+
+// TestNamedServeAllowsSameBucketCopy verifies the regression from
+// codex review pass 3: a CopyObject between two keys in the same
+// path-style bucket must succeed. Previously the http client sent
+// `X-Amz-Copy-Source: /<host>/<key>` (deriving the bucket from
+// b.host without the path segment), which the named-mount
+// RejectCrossBucketCopy middleware then rejected as cross-bucket.
+func TestNamedServeAllowsSameBucketCopy(t *testing.T) {
+	ctx := t.Context()
+	backend := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
+	guarded := storagehttp.RejectCrossBucketCopy("named", stripped)
+	mux.Handle("/named", guarded)
+	mux.Handle("/named/", guarded)
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	if _, err := storage.PutObject(ctx, server.URL+"/named//src", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject src: %v", err)
+	}
+	if err := storage.CopyObject(ctx, server.URL+"/named//src", server.URL+"/named//dst"); err != nil {
+		t.Fatalf("CopyObject same-bucket: %v", err)
+	}
+
+	reader, _, err := storage.GetObject(ctx, server.URL+"/named//dst")
+	if err != nil {
+		t.Fatalf("GetObject dst: %v", err)
+	}
+	body, _ := io.ReadAll(reader)
+	reader.Close()
+	if string(body) != "hello" {
+		t.Errorf("dst body = %q, want %q", body, "hello")
+	}
+}
