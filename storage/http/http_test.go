@@ -1286,3 +1286,86 @@ func TestBucketPathStyleURIWithPrefix(t *testing.T) {
 		t.Fatalf("DeleteObject: %v", err)
 	}
 }
+
+// TestPathStyleHTTPBucketSingleBucketRegistry verifies the regression
+// from codex review pass 2: a path-style HTTP bucket wrapped in
+// storage.SingleBucketRegistry must round-trip through the registry's
+// location comparison. Previously uri.Join with a multi-segment
+// location and empty path emitted a `//` marker that bucket.Location()
+// did not, causing the comparison to fail with ErrBucketNotFound.
+func TestPathStyleHTTPBucketSingleBucketRegistry(t *testing.T) {
+	ctx := t.Context()
+	backend := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
+	mux.Handle("/named", stripped)
+	mux.Handle("/named/", stripped)
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	bucket, err := storage.LoadBucket(ctx, server.URL+"/named//")
+	if err != nil {
+		t.Fatalf("LoadBucket: %v", err)
+	}
+
+	registry := storage.SingleBucketRegistry(bucket)
+	if _, err := storage.PutObjectAt(ctx, registry, server.URL+"/named//k1", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObjectAt via SingleBucketRegistry: %v", err)
+	}
+
+	if _, err := storage.HeadObjectAt(ctx, registry, server.URL+"/named//k1"); err != nil {
+		t.Fatalf("HeadObjectAt via SingleBucketRegistry: %v", err)
+	}
+}
+
+// TestNamedServeRejectsCrossBucketCopy verifies the regression from
+// codex review pass 2: in multi-bucket mode each backend handler is
+// isolated, so a PUT /a/dst with X-Amz-Copy-Source: /b/src must be
+// rejected (it cannot reach bucket b). Today it silently calls
+// bucket.CopyObject("src", "dst") on bucket a.
+func TestNamedServeRejectsCrossBucketCopy(t *testing.T) {
+	ctx := t.Context()
+	bucketA := new(memory.Bucket)
+	bucketB := new(memory.Bucket)
+
+	// Seed bucket a with key "src" so the buggy behavior would
+	// silently succeed by copying from a's "src" instead of b's.
+	if _, err := bucketA.PutObject(ctx, "src", strings.NewReader("from-a")); err != nil {
+		t.Fatalf("seed bucketA.src: %v", err)
+	}
+	if _, err := bucketB.PutObject(ctx, "src", strings.NewReader("from-b")); err != nil {
+		t.Fatalf("seed bucketB.src: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	for name, b := range map[string]*memory.Bucket{"a": bucketA, "b": bucketB} {
+		stripped := storagehttp.StripBucketNamePrefix(name, storagehttp.BucketHandler(b))
+		guarded := storagehttp.RejectCrossBucketCopy(name, stripped)
+		mux.Handle("/"+name, guarded)
+		mux.Handle("/"+name+"/", guarded)
+	}
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/a/dst", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Amz-Copy-Source", "/b/src")
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+
+	if res.StatusCode == http.StatusOK {
+		t.Fatalf("PUT /a/dst with X-Amz-Copy-Source: /b/src succeeded; expected error. body=%s", body)
+	}
+	if res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT /a/dst with cross-bucket copy: status %d, want 403 or 400; body=%s", res.StatusCode, body)
+	}
+}

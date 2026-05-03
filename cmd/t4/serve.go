@@ -142,7 +142,7 @@ func parseBucketArgs(args []string) ([]bucketSpec, error) {
 	seen := make(map[string]bool, len(args))
 	for _, arg := range args {
 		name, uri, hasEq := strings.Cut(arg, "=")
-		if hasEq && bucketNameRegexp.MatchString(name) {
+		if hasEq && bucketNameRegexp.MatchString(name) && name != "." && name != ".." {
 			if uri == "" {
 				return nil, fmt.Errorf("invalid bucket argument %q: uri must be non-empty", arg)
 			}
@@ -153,6 +153,15 @@ func parseBucketArgs(args []string) ([]bucketSpec, error) {
 			specs = append(specs, bucketSpec{name: name, uri: uri})
 			namedCount++
 			continue
+		}
+		// Names like "." and ".." are unreachable behind http.ServeMux
+		// (the path is canonicalized to "/" before routing), so even
+		// though the regex would accept them they cannot be served.
+		// Fall back to positional treatment so the user gets a clear
+		// "all bucket arguments must be of the form name=uri" error
+		// rather than a silently broken mount.
+		if hasEq && (name == "." || name == "..") {
+			return nil, fmt.Errorf("invalid bucket argument %q: %q cannot be used as a bucket name (unreachable through path-style routing)", arg, name)
 		}
 		// `=` may legitimately appear in a positional URI (e.g.
 		// `file:///tmp/a=b`); fall through to positional treatment
@@ -187,6 +196,7 @@ func buildBucketMux(ctx context.Context, specs []bucketSpec, handlerOpts ...stor
 			return nil, fmt.Errorf("loading bucket %q: %w", b.name, err)
 		}
 		h := storagehttp.StripBucketNamePrefix(b.name, storagehttp.BucketHandler(bucket, handlerOpts...))
+		h = storagehttp.RejectCrossBucketCopy(b.name, h)
 		mux.Handle("/"+b.name, h)
 		mux.Handle("/"+b.name+"/", h)
 		names = append(names, b.name)

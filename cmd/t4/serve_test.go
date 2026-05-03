@@ -78,6 +78,19 @@ func TestParseBucketArgs(t *testing.T) {
 			wantSpecs: []bucketSpec{{uri: "file:///tmp/a=b"}},
 		},
 		{
+			// Codex P3 pass 2: `.` and `..` are unreachable behind
+			// http.ServeMux because Chrome/Go canonicalize `/.` and
+			// `/..` to `/` before routing. Reject explicitly.
+			name:    "dot bucket name",
+			args:    []string{".=file:///tmp/a"},
+			wantErr: "invalid bucket argument",
+		},
+		{
+			name:    "dotdot bucket name",
+			args:    []string{"..=file:///tmp/a"},
+			wantErr: "invalid bucket argument",
+		},
+		{
 			name:    "duplicate name",
 			args:    []string{"a=file:///tmp/a", "a=file:///tmp/b"},
 			wantErr: "duplicate bucket name",

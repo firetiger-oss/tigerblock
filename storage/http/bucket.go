@@ -207,6 +207,14 @@ func (r *bodyReadCloser) Read(b []byte) (int, error) {
 }
 
 func (b *Bucket) Location() string {
+	// Emit the path-style `//` marker when b.host has a path
+	// component so the URI round-trips through uri.Split + Join +
+	// SingleBucketRegistry's identity comparison. The trailing `//`
+	// resolves to the bucket-only path-style form on Split and
+	// matches what Join produces from (scheme, multi-segment-loc).
+	if scheme, host, ok := strings.Cut(b.host, "://"); ok && strings.Contains(host, "/") {
+		return scheme + "://" + host + "//"
+	}
 	return b.host
 }
 

@@ -450,6 +450,32 @@ func StripBucketNamePrefix(bucketName string, handler http.Handler) http.Handler
 	})
 }
 
+// RejectCrossBucketCopy is an http middleware that rejects PUT
+// requests carrying an X-Amz-Copy-Source header that names a bucket
+// other than bucketName. Intended to be wrapped around per-bucket
+// handlers in a multi-bucket mux: each bucket handler only sees its
+// own backend, so without this guard a request like
+// `PUT /a/dst` with `X-Amz-Copy-Source: /b/src` would silently be
+// served as a same-bucket copy from a's `src` rather than being
+// rejected.
+func RejectCrossBucketCopy(bucketName string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
+				src := strings.TrimPrefix(cs, "/")
+				srcBucket, _, _ := strings.Cut(src, "/")
+				if srcBucket != bucketName {
+					Error(w, "AccessDenied",
+						fmt.Sprintf("Cross-bucket copy not supported: source bucket %q does not match %q", srcBucket, bucketName),
+						cs, http.StatusForbidden)
+					return
+				}
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
 func BytesRange(start, end int64) string {
 	b := make([]byte, 0, 32)
 	b = append(b, "bytes="...)
