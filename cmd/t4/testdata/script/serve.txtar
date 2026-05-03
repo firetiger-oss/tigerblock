@@ -1,0 +1,49 @@
+# Boots a real `t4 serve` subprocess in multi-bucket mode and exercises
+# the other t4 commands against it via path-style URIs (the
+# `<server>/<name>//<key>` form).
+
+mkdir bucket-a
+mkdir bucket-b
+
+pickport ADDR
+exec t4 serve --http $ADDR a=file://$WORK/bucket-a b=file://$WORK/bucket-b &
+ready http://$ADDR/
+
+# PUT lands in the named bucket (verified via on-disk file).
+stdin payload.txt
+exec t4 cp - http://$ADDR/a//k1
+exists $WORK/bucket-a/k1
+cmp $WORK/bucket-a/k1 payload.txt
+
+# GET reads it back.
+exec t4 cp http://$ADDR/a//k1 -
+stdout 'serve-ok'
+
+# LIST sees the key.
+exec t4 ls http://$ADDR/a//
+stdout '/k1'
+
+# stat works.
+exec t4 stat http://$ADDR/a//k1
+stdout 'Size'
+
+# Bucket isolation: bucket b doesn't see a's keys.
+exec t4 ls http://$ADDR/b//
+! stdout '/k1'
+
+# Unknown bucket name returns NoSuchBucket from StripBucketNamePrefix.
+! exec t4 stat http://$ADDR/missing//k1
+
+# Round-trip via a sub-prefix key.
+stdin payload.txt
+exec t4 cp - http://$ADDR/a//sub/k2
+exec t4 ls -r http://$ADDR/a//
+stdout '/sub/k2'
+
+exec t4 rm http://$ADDR/a//k1
+! exists $WORK/bucket-a/k1
+
+# testscript will reap the backgrounded server when the script exits.
+
+-- payload.txt --
+serve-ok

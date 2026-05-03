@@ -1,0 +1,27 @@
+# t4 cp uploads, downloads, and pipes object content through the running server.
+
+# Upload from stdin via "-" source (cp requires URI sources, no bare paths).
+stdin local.txt
+exec t4 cp - $BUCKET_A/k1
+stdout '/k1'
+
+# Verify the object landed on the file:// backend behind the server.
+exists $STORAGE_A/k1
+cmp $STORAGE_A/k1 local.txt
+
+# Download to stdout via "-" target.
+exec t4 cp $BUCKET_A/k1 -
+stdout 'hello world'
+
+# Round-trip via file:// scheme on a path inside $WORK.
+exec t4 cp $BUCKET_A/k1 file://$WORK/downloaded.txt
+cmp downloaded.txt local.txt
+
+# JSON output reports source/target/size.
+stdin local.txt
+exec t4 cp -o json - $BUCKET_A/k3
+stdout '"target":'
+stdout '"size":'
+
+-- local.txt --
+hello world

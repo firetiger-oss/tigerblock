@@ -1,0 +1,18 @@
+# t4 stat reports object metadata via HEAD against the running server.
+
+stdin data.txt
+exec t4 cp - $BUCKET_A/key1
+
+exec t4 stat $BUCKET_A/key1
+stdout 'Size'
+stdout 'ETag'
+
+exec t4 stat -o json $BUCKET_A/key1
+stdout '"size":'
+stdout '"etag":'
+
+# Missing object errors out.
+! exec t4 stat $BUCKET_A/missing
+
+-- data.txt --
+hello

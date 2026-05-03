@@ -1,0 +1,31 @@
+# t4 rm deletes objects via the running server.
+#
+# Note: the file:// backend treats DeleteObject as idempotent (no error
+# when the key is absent), so we don't assert that "rm <missing>" fails.
+
+stdin data.txt
+exec t4 cp - $BUCKET_A/temp
+exists $STORAGE_A/temp
+exec t4 rm $BUCKET_A/temp
+! exists $STORAGE_A/temp
+
+# --force always succeeds even with no object present.
+exec t4 rm -f $BUCKET_A/also-missing
+
+# Recursive delete walks a prefix.
+stdin data.txt
+exec t4 cp - $BUCKET_A/dir/a
+stdin data.txt
+exec t4 cp - $BUCKET_A/dir/b
+exec t4 rm -r $BUCKET_A/dir/
+! exists $STORAGE_A/dir/a
+! exists $STORAGE_A/dir/b
+
+# Trailing-slash prefix without -r is rejected.
+stdin data.txt
+exec t4 cp - $BUCKET_A/safe/k
+! exec t4 rm $BUCKET_A/safe/
+exists $STORAGE_A/safe/k
+
+-- data.txt --
+hello
