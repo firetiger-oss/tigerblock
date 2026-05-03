@@ -302,16 +302,15 @@ func TestJoinPreservesTrailingSlash(t *testing.T) {
 	}
 }
 
-
 func TestSplitPathStyle(t *testing.T) {
 	cases := []struct {
-		name              string
-		in                string
-		scheme            string
-		host              string
-		bucket            string
-		key               string
-		wantErrSubstring  string
+		name             string
+		in               string
+		scheme           string
+		host             string
+		bucket           string
+		key              string
+		wantErrSubstring string
 	}{
 		{name: "scheme host bucket key", in: "http://host/bucket/key", scheme: "http", host: "host", bucket: "bucket", key: "key"},
 		{name: "scheme host bucket only", in: "http://host/bucket", scheme: "http", host: "host", bucket: "bucket"},
