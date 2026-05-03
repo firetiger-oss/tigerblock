@@ -1,0 +1,40 @@
+# t4 ls walks bucket prefixes through the running server. ls prints full
+# URIs (storage.ListObjects joins scheme+host+key on each yielded object).
+
+stdin k1.txt
+exec t4 cp - $BUCKET_A/k1
+stdin k2.txt
+exec t4 cp - $BUCKET_A/k2
+stdin v.txt
+exec t4 cp - $BUCKET_A/sub/v
+
+# Default (delimited) listing surfaces top-level keys plus the sub/ prefix.
+exec t4 ls $BUCKET_A/
+stdout '/k1'
+stdout '/k2'
+stdout '/sub/'
+
+# Recursive listing flattens the prefix.
+exec t4 ls -r $BUCKET_A/
+stdout '/sub/v'
+
+# Long format includes the byte size column.
+exec t4 ls -l $BUCKET_A/
+stdout 'k1'
+stdout 'k2'
+
+# JSON output reports the same keys with structured fields.
+exec t4 ls -o json $BUCKET_A/
+stdout '"key": ".*/k1"'
+stdout '"key": ".*/k2"'
+
+# An empty bucket lists nothing.
+exec t4 ls $BUCKET_B/
+! stdout '.'
+
+-- k1.txt --
+one
+-- k2.txt --
+two
+-- v.txt --
+nested

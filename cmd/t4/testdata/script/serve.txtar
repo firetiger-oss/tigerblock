@@ -1,0 +1,36 @@
+# Boots a real `t4 serve` subprocess on a free port and exercises the
+# other t4 commands against it. This script stands the server up itself
+# (rather than relying on the per-script Setup-provided servers) so it
+# verifies the serve binary actually accepts connections.
+#
+# Single-bucket positional form is used because the http storage client
+# only addresses buckets at server root via URI; `WithBucketName` covers
+# the path-mounted case programmatically.
+
+mkdir local-bucket
+
+pickport ADDR
+exec t4 serve --http $ADDR file://$WORK/local-bucket &
+ready http://$ADDR/
+
+stdin payload.txt
+exec t4 cp - http://$ADDR/k1
+exists $WORK/local-bucket/k1
+cmp $WORK/local-bucket/k1 payload.txt
+
+exec t4 ls http://$ADDR/
+stdout '/k1'
+
+exec t4 stat http://$ADDR/k1
+stdout 'Size'
+
+exec t4 cp http://$ADDR/k1 -
+stdout 'serve-ok'
+
+exec t4 rm http://$ADDR/k1
+! exists $WORK/local-bucket/k1
+
+# testscript will reap the backgrounded server when the script exits.
+
+-- payload.txt --
+serve-ok

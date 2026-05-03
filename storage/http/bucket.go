@@ -93,12 +93,34 @@ func WithBearerToken(token string) BucketOption {
 	}
 }
 
+// WithBucketName configures the bucket to address itself as a named
+// path-style mount on the host. Requests are sent to
+// `<host>/<name>/<key>` rather than `<host>/<key>`, and the bucket's
+// Location and X-Amz-Copy-Source identifier reflect the configured
+// name. Use this when the bucket is one of many mounted on a
+// multi-bucket server (e.g. `t4 serve named=...`).
+func WithBucketName(name string) BucketOption {
+	name = strings.Trim(name, "/")
+	return func(b *Bucket) { b.name = name }
+}
+
 type Bucket struct {
 	client   *http.Client
 	listType string
 	host     string
+	name     string
 	header   http.Header
 	signer   secret.Signer
+}
+
+// baseURL returns the URL prefix every request is rooted under.
+// For a root-mounted bucket this is just b.host; for a named
+// path-style bucket it includes the bucket name.
+func (b *Bucket) baseURL() string {
+	if b.name == "" {
+		return b.host
+	}
+	return b.host + "/" + b.name
 }
 
 func escapeKey(key string) string {
@@ -110,7 +132,7 @@ func escapeKey(key string) string {
 }
 
 func (b *Bucket) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	r, err := http.NewRequestWithContext(ctx, method, b.host+"/"+path, body)
+	r, err := http.NewRequestWithContext(ctx, method, b.baseURL()+"/"+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +185,7 @@ func (r *bodyReadCloser) Read(b []byte) (int, error) {
 }
 
 func (b *Bucket) Location() string {
-	return b.host
+	return b.baseURL()
 }
 
 func (b *Bucket) Access(ctx context.Context) error {
@@ -485,9 +507,15 @@ func (b *Bucket) CopyObject(ctx context.Context, from, to string, options ...sto
 	}
 	defer req.Body.Close()
 
-	// Extract bucket name from host URL for x-amz-copy-source header
-	_, bucketName, _ := uri.Split(b.host)
-	req.Header.Set("X-Amz-Copy-Source", "/"+bucketName+"/"+escapeKey(from))
+	// Derive the bucket identifier for X-Amz-Copy-Source. A bucket
+	// constructed with WithBucketName knows its name explicitly; for
+	// a root-mounted bucket the conventional identifier is the
+	// server host.
+	bucketName := b.name
+	if bucketName == "" {
+		_, bucketName, _ = uri.Split(b.host)
+	}
+	req.Header.Set("X-Amz-Copy-Source", uri.JoinPathStyle("", "", bucketName, escapeKey(from)))
 
 	putOptions := storage.NewPutOptions(options...)
 	setHeaderIfNotEmpty(req.Header, "Cache-Control", putOptions.CacheControl())

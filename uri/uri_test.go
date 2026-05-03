@@ -1,6 +1,7 @@
 package uri_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/firetiger-oss/tigerblock/uri"
@@ -296,6 +297,116 @@ func TestJoinPreservesTrailingSlash(t *testing.T) {
 			result := uri.Join(test.scheme, test.location, test.path)
 			if result != test.expected {
 				t.Fatalf("expected %q, got %q", test.expected, result)
+			}
+		})
+	}
+}
+
+func TestSplitPathStyle(t *testing.T) {
+	cases := []struct {
+		name             string
+		in               string
+		scheme           string
+		host             string
+		bucket           string
+		key              string
+		wantErrSubstring string
+	}{
+		{name: "scheme host bucket key", in: "http://host/bucket/key", scheme: "http", host: "host", bucket: "bucket", key: "key"},
+		{name: "scheme host bucket only", in: "http://host/bucket", scheme: "http", host: "host", bucket: "bucket"},
+		{name: "scheme host bucket trailing", in: "http://host/bucket/", scheme: "http", host: "host", bucket: "bucket"},
+		{name: "scheme host only", in: "http://host", scheme: "http", host: "host"},
+		{name: "scheme host trailing", in: "http://host/", scheme: "http", host: "host"},
+		{name: "key with slashes", in: "http://host/bucket/sub/key", scheme: "http", host: "host", bucket: "bucket", key: "sub/key"},
+		{name: "key with trailing slash", in: "http://host/bucket/sub/", scheme: "http", host: "host", bucket: "bucket", key: "sub/"},
+		{name: "host with port", in: "http://host:8080/b/k", scheme: "http", host: "host:8080", bucket: "b", key: "k"},
+		{name: "https scheme", in: "https://h/b/k", scheme: "https", host: "h", bucket: "b", key: "k"},
+
+		{name: "empty input", in: "", wantErrSubstring: "missing scheme"},
+		{name: "no scheme", in: "host/bucket/key", wantErrSubstring: "missing scheme"},
+		{name: "empty scheme", in: "://host/b/k", wantErrSubstring: "empty scheme"},
+		{name: "no host", in: "http://", wantErrSubstring: "missing host"},
+		{name: "no host with path", in: "http:///b/k", wantErrSubstring: "missing host"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme, host, bucket, key, err := uri.SplitPathStyle(tc.in)
+			if tc.wantErrSubstring != "" {
+				if err == nil {
+					t.Fatalf("SplitPathStyle(%q) = nil err, want error containing %q", tc.in, tc.wantErrSubstring)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSubstring) {
+					t.Fatalf("SplitPathStyle(%q) err = %v, want substring %q", tc.in, err, tc.wantErrSubstring)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SplitPathStyle(%q) unexpected err: %v", tc.in, err)
+			}
+			if scheme != tc.scheme || host != tc.host || bucket != tc.bucket || key != tc.key {
+				t.Fatalf("SplitPathStyle(%q) = (%q, %q, %q, %q), want (%q, %q, %q, %q)",
+					tc.in, scheme, host, bucket, key, tc.scheme, tc.host, tc.bucket, tc.key)
+			}
+		})
+	}
+}
+
+func TestJoinPathStyle(t *testing.T) {
+	cases := []struct {
+		name   string
+		scheme string
+		host   string
+		bucket string
+		key    string
+		want   string
+	}{
+		{name: "all parts", scheme: "http", host: "host", bucket: "b", key: "k", want: "http://host/b/k"},
+		{name: "bucket only", scheme: "http", host: "host", bucket: "b", want: "http://host/b"},
+		{name: "host only", scheme: "http", host: "host", want: "http://host"},
+		{name: "key only", scheme: "http", host: "host", key: "k", want: "http://host/k"},
+		{name: "key with slashes", scheme: "http", host: "host", bucket: "b", key: "sub/k", want: "http://host/b/sub/k"},
+		{name: "host with port", scheme: "https", host: "h:8080", bucket: "b", key: "k", want: "https://h:8080/b/k"},
+		// Schemeless form: omits the `scheme://` prefix entirely.
+		// Useful for building S3-style `/bucket/key` resource paths
+		// like the X-Amz-Copy-Source header.
+		{name: "schemeless bucket key", bucket: "b", key: "k", want: "/b/k"},
+		{name: "schemeless bucket only", bucket: "b", want: "/b"},
+		{name: "schemeless key with slashes", bucket: "b", key: "sub/k", want: "/b/sub/k"},
+		{name: "all empty", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := uri.JoinPathStyle(tc.scheme, tc.host, tc.bucket, tc.key)
+			if got != tc.want {
+				t.Fatalf("JoinPathStyle(%q,%q,%q,%q) = %q, want %q",
+					tc.scheme, tc.host, tc.bucket, tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSplitJoinPathStyleRoundTrip(t *testing.T) {
+	// Cases where Join(Split(s)) returns s exactly. (Trailing
+	// slashes on the bucket portion don't round-trip when the key
+	// is empty — see TestSplitPathStyle.)
+	uris := []string{
+		"http://host/b/k",
+		"http://host/b/sub/k",
+		"http://host/b/sub/",
+		"http://host/b",
+		"http://host",
+		"https://h:8080/bucket/key",
+	}
+	for _, in := range uris {
+		t.Run(in, func(t *testing.T) {
+			scheme, host, bucket, key, err := uri.SplitPathStyle(in)
+			if err != nil {
+				t.Fatalf("SplitPathStyle: %v", err)
+			}
+			got := uri.JoinPathStyle(scheme, host, bucket, key)
+			if got != in {
+				t.Fatalf("round-trip: %q -> Split -> Join -> %q", in, got)
 			}
 		})
 	}

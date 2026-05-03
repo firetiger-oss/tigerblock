@@ -1,6 +1,7 @@
 package uri
 
 import (
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -147,6 +148,72 @@ func Join(scheme, location string, path ...string) string {
 		uri = scheme + "://" + uri
 	}
 	return uri
+}
+
+// SplitPathStyle parses a path-style URI of the form
+// `scheme://host/bucket/key`. The first path segment after the host
+// is the bucket name; everything after is the object key (which may
+// contain slashes and may be empty). All segments are returned
+// verbatim — Clean is not applied.
+//
+// Returns an error if the input has no scheme, no `://`, or no host.
+// Trailing slashes on the bucket portion are not preserved when the
+// key is empty.
+//
+// Use this for URIs that unambiguously denote path-style multi-bucket
+// addressing — it is intentionally separate from Split so that the
+// general-purpose URI parser stays scheme-agnostic.
+func SplitPathStyle(s string) (scheme, host, bucket, key string, err error) {
+	sep := strings.Index(s, "://")
+	if sep < 0 {
+		return "", "", "", "", fmt.Errorf("uri: missing scheme in path-style URI %q", s)
+	}
+	scheme = s[:sep]
+	if scheme == "" {
+		return "", "", "", "", fmt.Errorf("uri: empty scheme in path-style URI %q", s)
+	}
+	rest := s[sep+3:]
+	host, pathPart, hasPath := strings.Cut(rest, "/")
+	if host == "" {
+		return "", "", "", "", fmt.Errorf("uri: missing host in path-style URI %q", s)
+	}
+	if !hasPath {
+		return scheme, host, "", "", nil
+	}
+	bucket, key, _ = strings.Cut(pathPart, "/")
+	return scheme, host, bucket, key, nil
+}
+
+// JoinPathStyle constructs a path-style URI of the form
+// `scheme://host/bucket/key`. Empty trailing segments are omitted, so
+// `JoinPathStyle("http","host","","") == "http://host"` and
+// `JoinPathStyle("http","host","b","") == "http://host/b"`.
+//
+// When `scheme` is empty the `scheme://` prefix is omitted entirely,
+// which is convenient for building S3-style `/bucket/key` resource
+// paths (e.g. `X-Amz-Copy-Source`):
+// `JoinPathStyle("","","b","k") == "/b/k"`.
+func JoinPathStyle(scheme, host, bucket, key string) string {
+	var b strings.Builder
+	if scheme != "" {
+		b.WriteString(scheme)
+		b.WriteString("://")
+	}
+	b.WriteString(host)
+	switch {
+	case bucket != "" && key != "":
+		b.WriteByte('/')
+		b.WriteString(bucket)
+		b.WriteByte('/')
+		b.WriteString(key)
+	case bucket != "":
+		b.WriteByte('/')
+		b.WriteString(bucket)
+	case key != "":
+		b.WriteByte('/')
+		b.WriteString(key)
+	}
+	return b.String()
 }
 
 func join(seq iter.Seq[string]) string {

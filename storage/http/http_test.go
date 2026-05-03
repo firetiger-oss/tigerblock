@@ -1056,3 +1056,91 @@ func TestHTTPServerKeyDecodingRaw(t *testing.T) {
 		}
 	})
 }
+
+// TestBucketWithBucketName verifies that a bucket constructed with
+// WithBucketName addresses keys under the named mount on a
+// multi-bucket server (mirroring `t4 serve <name>=<uri>`). This is
+// the explicit programmatic API for path-style addressing.
+func TestBucketWithBucketName(t *testing.T) {
+	ctx := t.Context()
+	backend := new(memory.Bucket)
+
+	mux := http.NewServeMux()
+	stripped := storagehttp.StripBucketNamePrefix("named", storagehttp.BucketHandler(backend))
+	mux.Handle("/named", stripped)
+	mux.Handle("/named/", stripped)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no bucket at root", http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	bucket := storagehttp.NewBucket(server.URL, storagehttp.WithBucketName("named"))
+
+	if got := bucket.Location(); got != server.URL+"/named" {
+		t.Errorf("Location() = %q, want %q", got, server.URL+"/named")
+	}
+
+	if _, err := bucket.PutObject(ctx, "k1", strings.NewReader("hello")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	reader, info, err := bucket.GetObject(ctx, "k1")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	body, _ := io.ReadAll(reader)
+	reader.Close()
+	if string(body) != "hello" {
+		t.Errorf("GetObject body = %q, want %q", body, "hello")
+	}
+	if info.Size != 5 {
+		t.Errorf("GetObject size = %d, want 5", info.Size)
+	}
+
+	if _, err := bucket.HeadObject(ctx, "k1"); err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+
+	gotKeys := []string{}
+	for obj, err := range bucket.ListObjects(ctx) {
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		gotKeys = append(gotKeys, obj.Key)
+	}
+	if len(gotKeys) != 1 || gotKeys[0] != "k1" {
+		t.Errorf("ListObjects keys = %v, want [k1]", gotKeys)
+	}
+
+	// The key actually landed in the named-mounted backend, not at root.
+	if _, err := backend.HeadObject(ctx, "k1"); err != nil {
+		t.Errorf("backend HeadObject k1 missing: %v", err)
+	}
+
+	// Same-bucket copy round-trip works (X-Amz-Copy-Source uses the
+	// configured bucket name, which the server-side strip middleware
+	// matches).
+	if err := bucket.CopyObject(ctx, "k1", "k1-copy"); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	if _, err := backend.HeadObject(ctx, "k1-copy"); err != nil {
+		t.Errorf("backend HeadObject k1-copy missing: %v", err)
+	}
+
+	if err := bucket.DeleteObject(ctx, "k1"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if err := bucket.DeleteObject(ctx, "k1-copy"); err != nil {
+		t.Fatalf("DeleteObject k1-copy: %v", err)
+	}
+
+	// Without WithBucketName, requests would hit "/" which our mux
+	// returns 404 for; verify by running the same flow without the
+	// option.
+	rootBucket := storagehttp.NewBucket(server.URL)
+	if _, err := rootBucket.PutObject(ctx, "k2", strings.NewReader("nope")); err == nil {
+		t.Errorf("PutObject without bucket name: expected error from root mount, got nil")
+	}
+}

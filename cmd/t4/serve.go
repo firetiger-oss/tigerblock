@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -77,11 +80,22 @@ func (p *certProvider) get(ctx context.Context) (*tls.Certificate, error) {
 }
 
 var serveCmd = &cobra.Command{
-	Use:   "serve [bucket-uri]",
-	Short: "Serve a storage bucket over HTTP",
-	Long:  "Start an HTTP server that serves objects from a storage bucket.",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runServe,
+	Use:   "serve <bucket-uri> | <name>=<uri> [<name>=<uri>...]",
+	Short: "Serve one or more storage buckets over HTTP",
+	Long: `Start an HTTP server that serves objects from one or more storage buckets.
+
+Two argument forms are supported:
+
+  - A single unnamed bucket URI is mounted at /:
+      t4 serve file:///tmp/data
+
+  - One or more <name>=<uri> pairs are mounted via path-style addressing
+    at /<name>/...; bucket names must match [A-Za-z0-9._-]+:
+      t4 serve a=file:///tmp/a b=file:///tmp/b
+
+The two forms cannot be mixed.`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runServe,
 }
 
 func init() {
@@ -109,11 +123,132 @@ func tlsLoader(file, secretID, label string) (pemLoader, error) {
 	}
 }
 
+// bucketSpec identifies one bucket to serve. An empty name means the
+// bucket is mounted at the server root (single-bucket back-compat mode).
+type bucketSpec struct {
+	name string
+	uri  string
+}
+
+var bucketNameRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func parseBucketArgs(args []string) ([]bucketSpec, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("at least one bucket argument is required")
+	}
+
+	specs := make([]bucketSpec, 0, len(args))
+	namedCount := 0
+	seen := make(map[string]bool, len(args))
+	for _, arg := range args {
+		name, uri, hasEq := strings.Cut(arg, "=")
+		if hasEq && bucketNameRegexp.MatchString(name) && name != "." && name != ".." {
+			if uri == "" {
+				return nil, fmt.Errorf("invalid bucket argument %q: uri must be non-empty", arg)
+			}
+			if seen[name] {
+				return nil, fmt.Errorf("duplicate bucket name %q", name)
+			}
+			seen[name] = true
+			specs = append(specs, bucketSpec{name: name, uri: uri})
+			namedCount++
+			continue
+		}
+		// Names like "." and ".." are unreachable behind http.ServeMux
+		// (the path is canonicalized to "/" before routing), so even
+		// though the regex would accept them they cannot be served.
+		// Fall back to positional treatment so the user gets a clear
+		// "all bucket arguments must be of the form name=uri" error
+		// rather than a silently broken mount.
+		if hasEq && (name == "." || name == "..") {
+			return nil, fmt.Errorf("invalid bucket argument %q: %q cannot be used as a bucket name (unreachable through path-style routing)", arg, name)
+		}
+		// `=` may legitimately appear in a positional URI (e.g.
+		// `file:///tmp/a=b`); fall through to positional treatment
+		// when the LHS doesn't look like a bucket name.
+		specs = append(specs, bucketSpec{uri: arg})
+	}
+
+	switch {
+	case namedCount == len(specs):
+		return specs, nil
+	case namedCount == 0 && len(specs) == 1:
+		return specs, nil
+	default:
+		return nil, fmt.Errorf("all bucket arguments must be of the form name=uri (or pass a single bucket URI without a name)")
+	}
+}
+
+func buildBucketMux(ctx context.Context, specs []bucketSpec, handlerOpts ...storagehttp.HandlerOption) (http.Handler, error) {
+	if len(specs) == 1 && specs[0].name == "" {
+		bucket, err := storage.LoadBucket(ctx, specs[0].uri)
+		if err != nil {
+			return nil, err
+		}
+		return storagehttp.BucketHandler(bucket, handlerOpts...), nil
+	}
+
+	mux := http.NewServeMux()
+	names := make([]string, 0, len(specs))
+	for _, b := range specs {
+		bucket, err := storage.LoadBucket(ctx, b.uri)
+		if err != nil {
+			return nil, fmt.Errorf("loading bucket %q: %w", b.name, err)
+		}
+		h := storagehttp.StripBucketNamePrefix(b.name, storagehttp.BucketHandler(bucket, handlerOpts...))
+		h = rejectCrossBucketCopy(b.name, h)
+		mux.Handle("/"+b.name, h)
+		mux.Handle("/"+b.name+"/", h)
+		names = append(names, b.name)
+	}
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string][]string{"buckets": names})
+			return
+		}
+		first, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		storagehttp.Error(w, "NoSuchBucket", "The specified bucket does not exist", first, http.StatusNotFound)
+	})
+
+	return mux, nil
+}
+
+// rejectCrossBucketCopy guards a named-bucket handler against PUT
+// requests carrying X-Amz-Copy-Source headers that point at a
+// different bucket. Each named-mode handler only sees its own
+// backend, so without this guard a request like
+// `PUT /a/dst` with `X-Amz-Copy-Source: /b/src` would silently be
+// served as a same-bucket copy from a's `src`. We answer 403
+// AccessDenied at the mux layer instead.
+func rejectCrossBucketCopy(bucketName string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
+				src := strings.TrimPrefix(cs, "/")
+				srcBucket, _, _ := strings.Cut(src, "/")
+				if srcBucket != bucketName {
+					storagehttp.Error(w, "AccessDenied",
+						fmt.Sprintf("Cross-bucket copy not supported: source bucket %q does not match %q", srcBucket, bucketName),
+						cs, http.StatusForbidden)
+					return
+				}
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
 func runServe(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cmd.SilenceUsage = true
 
-	bucketURI := args[0]
+	specs, err := parseBucketArgs(args)
+	if err != nil {
+		return err
+	}
+
 	httpAddr, _ := cmd.Flags().GetString("http")
 	basicAuthUsername, _ := cmd.Flags().GetString("basic-auth-username")
 	basicAuthSecretID, _ := cmd.Flags().GetString("basic-auth-secret-id")
@@ -137,12 +272,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	tlsEnabled := loadCert != nil
 
-	bucket, err := storage.LoadBucket(ctx, bucketURI)
+	handler, err := buildBucketMux(ctx, specs)
 	if err != nil {
 		return err
 	}
-
-	handler := storagehttp.BucketHandler(bucket)
 
 	var authenticators []authn.Authenticator
 
