@@ -2,19 +2,79 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"sync/atomic"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/firetiger-oss/tigerblock/secret"
 	"github.com/firetiger-oss/tigerblock/secret/authn"
 	"github.com/firetiger-oss/tigerblock/storage"
+	"github.com/firetiger-oss/tigerblock/storage/cache"
 	storagehttp "github.com/firetiger-oss/tigerblock/storage/http"
 
 	_ "github.com/firetiger-oss/tigerblock/secret/aws"
 	_ "github.com/firetiger-oss/tigerblock/secret/env"
 	_ "github.com/firetiger-oss/tigerblock/secret/gcp"
 )
+
+const certCacheTTL = 1 * time.Minute
+
+type pemLoader func(ctx context.Context) ([]byte, error)
+
+func fileLoader(path string) pemLoader {
+	return func(ctx context.Context) ([]byte, error) {
+		return os.ReadFile(path)
+	}
+}
+
+func secretLoader(id string) pemLoader {
+	return func(ctx context.Context) ([]byte, error) {
+		v, _, err := secret.Get(ctx, id)
+		return []byte(v), err
+	}
+}
+
+type certProvider struct {
+	loadCert pemLoader
+	loadKey  pemLoader
+	ttl      time.Duration
+	cache    cache.TTL[struct{}, *tls.Certificate]
+	lastGood atomic.Pointer[tls.Certificate]
+}
+
+func (p *certProvider) get(ctx context.Context) (*tls.Certificate, error) {
+	now := time.Now()
+	cert, _, err := p.cache.Load(struct{}{}, now, func() (int64, *tls.Certificate, time.Time, error) {
+		certPEM, err := p.loadCert(ctx)
+		if err != nil {
+			return 0, nil, time.Time{}, fmt.Errorf("loading TLS certificate: %w", err)
+		}
+		keyPEM, err := p.loadKey(ctx)
+		if err != nil {
+			return 0, nil, time.Time{}, fmt.Errorf("loading TLS key: %w", err)
+		}
+		c, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			return 0, nil, time.Time{}, fmt.Errorf("parsing TLS certificate: %w", err)
+		}
+		return 0, &c, now.Add(p.ttl), nil
+	})
+	if err != nil {
+		if good := p.lastGood.Load(); good != nil {
+			log.Printf("warning: TLS cert refresh failed, serving last known good cert: %v", err)
+			return good, nil
+		}
+		return nil, err
+	}
+	p.lastGood.Store(cert)
+	return cert, nil
+}
 
 var serveCmd = &cobra.Command{
 	Use:   "serve [bucket-uri]",
@@ -30,6 +90,23 @@ func init() {
 	serveCmd.Flags().String("basic-auth-secret-id", "", "Secret store URI for basic auth credentials")
 	serveCmd.Flags().String("bearer-token-secret-id", "", "Secret store URI for bearer token auth")
 	serveCmd.Flags().String("presign-secret-id", "", "Secret ID for validating presigned URLs")
+	serveCmd.Flags().String("tls-cert-file", "", "Path to PEM-encoded TLS certificate file")
+	serveCmd.Flags().String("tls-cert-secret", "", "Secret ID resolving to PEM-encoded TLS certificate")
+	serveCmd.Flags().String("tls-key-file", "", "Path to PEM-encoded TLS private key file")
+	serveCmd.Flags().String("tls-key-secret", "", "Secret ID resolving to PEM-encoded TLS private key")
+}
+
+func tlsLoader(file, secretID, label string) (pemLoader, error) {
+	switch {
+	case file != "" && secretID != "":
+		return nil, fmt.Errorf("--tls-%s-file and --tls-%s-secret are mutually exclusive", label, label)
+	case file != "":
+		return fileLoader(file), nil
+	case secretID != "":
+		return secretLoader(secretID), nil
+	default:
+		return nil, nil
+	}
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -42,6 +119,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 	basicAuthSecretID, _ := cmd.Flags().GetString("basic-auth-secret-id")
 	bearerTokenSecretID, _ := cmd.Flags().GetString("bearer-token-secret-id")
 	presignSecretID, _ := cmd.Flags().GetString("presign-secret-id")
+	tlsCertFile, _ := cmd.Flags().GetString("tls-cert-file")
+	tlsCertSecret, _ := cmd.Flags().GetString("tls-cert-secret")
+	tlsKeyFile, _ := cmd.Flags().GetString("tls-key-file")
+	tlsKeySecret, _ := cmd.Flags().GetString("tls-key-secret")
+
+	loadCert, err := tlsLoader(tlsCertFile, tlsCertSecret, "cert")
+	if err != nil {
+		return err
+	}
+	loadKey, err := tlsLoader(tlsKeyFile, tlsKeySecret, "key")
+	if err != nil {
+		return err
+	}
+	if (loadCert == nil) != (loadKey == nil) {
+		return fmt.Errorf("TLS certificate and key must be set together")
+	}
+	tlsEnabled := loadCert != nil
 
 	bucket, err := storage.LoadBucket(ctx, bucketURI)
 	if err != nil {
@@ -96,13 +190,37 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	server := &http.Server{Addr: httpAddr, Handler: handler}
 
+	if tlsEnabled {
+		provider := &certProvider{
+			loadCert: loadCert,
+			loadKey:  loadKey,
+			ttl:      certCacheTTL,
+			cache:    cache.TTL[struct{}, *tls.Certificate]{Limit: 1},
+		}
+		if _, err := provider.get(ctx); err != nil {
+			return err
+		}
+		server.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				return provider.get(hello.Context())
+			},
+		}
+	}
+
 	go func() {
 		<-ctx.Done()
 		server.Shutdown(context.Background())
 	}()
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	var serveErr error
+	if tlsEnabled {
+		serveErr = server.ListenAndServeTLS("", "")
+	} else {
+		serveErr = server.ListenAndServe()
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		return serveErr
 	}
 
 	return nil
