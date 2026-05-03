@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/EmissarySocial/emissary/tools/cacheheader"
+	"github.com/firetiger-oss/tigerblock/cache/lru"
 	"github.com/firetiger-oss/tigerblock/storage"
-	"github.com/firetiger-oss/tigerblock/storage/cache/lru"
 )
 
 // isErrNoSpace checks if an error is due to no space left on device (ENOSPC)

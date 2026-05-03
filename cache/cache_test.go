@@ -10,7 +10,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 )
 
 func TestCache(t *testing.T) {

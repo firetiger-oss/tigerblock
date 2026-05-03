@@ -3,7 +3,7 @@ package cache_test
 import (
 	"testing"
 
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 )
 
 func TestValue(t *testing.T) {

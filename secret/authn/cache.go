@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/firetiger-oss/tigerblock/storage/cache"
+	"github.com/firetiger-oss/tigerblock/cache"
 )
 
 const (
