@@ -1,0 +1,71 @@
+version: 2
+project_name: t4
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: t4
+    main: ./cmd/t4
+    binary: t4
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: t4
+    ids:
+      - t4
+    name_template: "t4_{{.Version}}_{{.Os}}_{{.Arch}}"
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: t4
+    ids:
+      - t4
+    repository:
+      owner: firetiger-oss
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/firetiger-oss/tigerblock
+    description: "CLI for object storage across S3, GCS, R2, HTTP, and the local filesystem"
+    license: Apache-2.0
+    commit_author:
+      name: firetiger-bot
+      email: bot@firetiger.com
+    commit_msg_template: "t4: bump to {{ .Tag }}"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/t4 --version")
