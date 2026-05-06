@@ -113,6 +113,15 @@ selects the backend.
 
 ### Install
 
+With Homebrew (macOS and Linux):
+
+```sh
+brew tap firetiger-oss/tap
+brew install t4
+```
+
+Or with `go install`:
+
 ```sh
 go install github.com/firetiger-oss/tigerblock/cmd/t4@latest
 ```

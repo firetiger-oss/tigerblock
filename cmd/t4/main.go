@@ -25,10 +25,13 @@ import (
 	bearerauth "github.com/firetiger-oss/tigerblock/secret/authn/bearer"
 )
 
+var version = "dev"
+
 var rootCmd = &cobra.Command{
-	Use:   "t4",
-	Short: "tigerblock CLI for interacting with object storage",
-	Long:  "A command line interface for listing, copying, and managing objects across storage backends (S3, GCS, file, memory, HTTP).",
+	Use:     "t4",
+	Short:   "tigerblock CLI for interacting with object storage",
+	Long:    "A command line interface for listing, copying, and managing objects across storage backends (S3, GCS, file, memory, HTTP).",
+	Version: version,
 }
 
 func init() {
