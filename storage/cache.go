@@ -156,6 +156,10 @@ func (c *Cache) PageSize() int64 {
 }
 
 // CacheStat contains statistics about the cache configuration and utilization.
+//
+// The first six fields apply to any cache. The remaining fields are populated
+// only by the file cache (storage/file.Cache); in-memory caches leave them
+// zero. They are colocated here so all observers consume a single Stat shape.
 type CacheStat struct {
 	Limit     int64 // Maximum size of the cache in bytes.
 	Entries   int64 // Current number of cached entries.
@@ -163,11 +167,47 @@ type CacheStat struct {
 	Hits      int64 // Total number of cache hits.
 	Misses    int64 // Total number of cache misses.
 	Evictions int64 // Total number of evictions from the cache.
+
+	// InFlight is the number of bytes currently being written to the cache
+	// but not yet committed to the LRU. Counted against the cache limit by
+	// evictUntilFits so concurrent writers see each other's pending I/O.
+	InFlight int64
+
+	// EvictUntilFitsCount counts invocations of the proactive (pre-write)
+	// eviction path introduced in FIRE-2419. Non-zero indicates the
+	// in-flight back-pressure is engaging.
+	EvictUntilFitsCount int64
+
+	// EvictForSpaceCount counts invocations of the reactive (post-ENOSPC)
+	// eviction path. Should trend toward zero as the proactive path keeps
+	// usage within bounds.
+	EvictForSpaceCount int64
+
+	// WriteErrorsENOSPC counts cache write failures attributable to
+	// ENOSPC/EDQUOT. This is the user-visible end-goal signal for the
+	// FIRE-2419 fix rollout.
+	WriteErrorsENOSPC int64
+
+	// WriteErrorsOther counts cache write failures that were not ENOSPC.
+	WriteErrorsOther int64
+}
+
+func cacheStatFromLRU(s cache.Stat) CacheStat {
+	return CacheStat{
+		Limit:     s.Limit,
+		Entries:   s.Entries,
+		Size:      s.Size,
+		Hits:      s.Hits,
+		Misses:    s.Misses,
+		Evictions: s.Evictions,
+	}
 }
 
 // Stat returns statistics about the cache, including the page size, number of
 func (c *Cache) Stat() (objects, infos, pages CacheStat) {
-	return CacheStat(c.objects.Stat()), CacheStat(c.infos.Stat()), CacheStat(c.pages.Stat())
+	return cacheStatFromLRU(c.objects.Stat()),
+		cacheStatFromLRU(c.infos.Stat()),
+		cacheStatFromLRU(c.pages.Stat())
 }
 
 var _ Adapter = (*Cache)(nil)

@@ -22,6 +22,7 @@ import (
 	"github.com/EmissarySocial/emissary/tools/cacheheader"
 	"github.com/firetiger-oss/tigerblock/cache/lru"
 	"github.com/firetiger-oss/tigerblock/storage"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // isErrNoSpace checks if an error is due to no space left on device (ENOSPC)
@@ -39,10 +40,42 @@ type Cache struct {
 	mutex    sync.Mutex
 	items    lru.LRU[string, struct{}]
 	inFlight atomic.Int64
+
+	// Counters for rollout-monitoring the FIRE-2419 fix.
+	// evictUntilFitsCount tracks the proactive (pre-write) eviction path
+	// introduced by the fix; evictForSpaceCount tracks the reactive
+	// (post-ENOSPC) path that pre-dates it. As the fix takes effect the
+	// proactive counter should rise and the reactive counter should fall.
+	evictUntilFitsCount atomic.Int64
+	evictForSpaceCount  atomic.Int64
+	writeErrorsENOSPC   atomic.Int64
+	writeErrorsOther    atomic.Int64
+
+	metricsRegistration metric.Registration
 }
 
-func NewCache(tmpdir string, size int64) *Cache {
-	return &Cache{tmpdir: tmpdir, size: size, log: slog.Default()}
+// Option configures a Cache at construction time.
+type Option func(*Cache)
+
+// WithMeterProvider registers OpenTelemetry metrics for this cache using the
+// supplied MeterProvider. Without this option the cache emits no metrics; it
+// still always records the counters internally, so they remain observable via
+// Stat regardless.
+func WithMeterProvider(provider metric.MeterProvider) Option {
+	return func(c *Cache) {
+		if provider == nil {
+			return
+		}
+		registerCacheMetrics(c, provider)
+	}
+}
+
+func NewCache(tmpdir string, size int64, options ...Option) *Cache {
+	c := &Cache{tmpdir: tmpdir, size: size, log: slog.Default()}
+	for _, opt := range options {
+		opt(c)
+	}
+	return c
 }
 
 // shouldCacheObject determines if an object should be cached based on its cache control headers
@@ -107,11 +140,17 @@ func (c *Cache) Stat() storage.CacheStat {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	return storage.CacheStat{
-		Limit:     c.size,
-		Size:      c.items.Size,
-		Hits:      c.items.Hits,
-		Misses:    c.items.Misses,
-		Evictions: c.items.Evictions,
+		Limit:               c.size,
+		Entries:             c.items.Entries,
+		Size:                c.items.Size,
+		Hits:                c.items.Hits,
+		Misses:              c.items.Misses,
+		Evictions:           c.items.Evictions,
+		InFlight:            c.inFlight.Load(),
+		EvictUntilFitsCount: c.evictUntilFitsCount.Load(),
+		EvictForSpaceCount:  c.evictForSpaceCount.Load(),
+		WriteErrorsENOSPC:   c.writeErrorsENOSPC.Load(),
+		WriteErrorsOther:    c.writeErrorsOther.Load(),
 	}
 }
 
@@ -185,6 +224,7 @@ func (c *Cache) insert(path string, size int64) {
 // It evicts LRU entries until at least targetSize bytes are freed.
 // Returns the total bytes freed.
 func (c *Cache) evictForSpace(targetSize int64) int64 {
+	c.evictForSpaceCount.Add(1)
 	var evictedPaths []string
 	var freedBytes int64
 
@@ -213,6 +253,7 @@ func (c *Cache) evictForSpace(targetSize int64) int64 {
 // Call this before beginning a write of size bytes so that concurrent writers account for
 // each other's in-flight disk usage, preventing ENOSPC under high concurrency.
 func (c *Cache) evictUntilFits() {
+	c.evictUntilFitsCount.Add(1)
 	var evictedPaths []string
 	defer func() {
 		for _, p := range evictedPaths {
@@ -444,8 +485,11 @@ func (b *cachedBucket) getObjectFromBucket(ctx context.Context, key, filePath st
 	if _, err := io.Copy(f, body); err != nil {
 		b.log.WarnContext(ctx, "cache: failed to write object", "key", key, "error", err)
 		if isErrNoSpace(err) {
+			b.writeErrorsENOSPC.Add(1)
 			// Trigger emergency eviction to free disk space for future requests
 			b.evictForSpace(info.Size * 2)
+		} else {
+			b.writeErrorsOther.Add(1)
 		}
 		// Re-fetch from backend without caching (graceful degradation)
 		// The original body is now consumed/corrupted, so we need a fresh fetch
@@ -528,8 +572,11 @@ func (b *cachedBucket) PutObject(ctx context.Context, key string, value io.Reade
 				// Get how much was written before the error
 				written, _ := tmpFile.Seek(0, io.SeekCurrent)
 				if isErrNoSpace(err) {
+					b.writeErrorsENOSPC.Add(1)
 					// Trigger emergency eviction to free disk space for future requests
 					b.evictForSpace(written * 2)
+				} else {
+					b.writeErrorsOther.Add(1)
 				}
 				// Seek back to start of temp file to recover data already written
 				if _, seekErr := tmpFile.Seek(0, io.SeekStart); seekErr == nil {
