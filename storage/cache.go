@@ -12,7 +12,6 @@ import (
 
 	"github.com/firetiger-oss/concurrent"
 	"github.com/firetiger-oss/tigerblock/cache"
-	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -58,11 +57,6 @@ func CacheTTL(d time.Duration) CacheOption {
 	return func(cache *Cache) { cache.ttl = d }
 }
 
-// CacheMeterProvider enables cache metrics using the provided MeterProvider.
-func CacheMeterProvider(provider metric.MeterProvider) CacheOption {
-	return func(cache *Cache) { registerCacheMetrics(cache, provider) }
-}
-
 // Cache is an in-memory cache for objects read from a Bucket.
 type Cache struct {
 	pages    cache.TTL[objectRange, cachedObject]
@@ -70,8 +64,6 @@ type Cache struct {
 	objects  cache.TTL[string, cachedObject]
 	pageSize int64
 	ttl      time.Duration
-
-	metricsRegistration metric.Registration
 }
 
 type objectRange struct {

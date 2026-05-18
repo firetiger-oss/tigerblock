@@ -33,53 +33,79 @@ type Observable interface {
 // method removes the callback.
 func Register(provider metric.MeterProvider, o Observable, attrs ...attribute.KeyValue) (metric.Registration, error) {
 	meter := provider.Meter(instrumentationName)
-
-	sizeBytes, err := meter.Int64ObservableGauge("storage.cache.size.bytes",
-		metric.WithDescription("Current cache size in bytes."),
-		metric.WithUnit("By"))
-	if err != nil {
-		return nil, err
-	}
-	limitBytes, err := meter.Int64ObservableGauge("storage.cache.limit.bytes",
-		metric.WithDescription("Configured cache size limit in bytes."),
-		metric.WithUnit("By"))
-	if err != nil {
-		return nil, err
-	}
-	entries, err := meter.Int64ObservableGauge("storage.cache.entries",
-		metric.WithDescription("Current number of cached entries."),
-		metric.WithUnit("{entry}"))
-	if err != nil {
-		return nil, err
-	}
-	hits, err := meter.Int64ObservableCounter("storage.cache.hits",
-		metric.WithDescription("Total number of cache hits."),
-		metric.WithUnit("{hits}"))
-	if err != nil {
-		return nil, err
-	}
-	misses, err := meter.Int64ObservableCounter("storage.cache.misses",
-		metric.WithDescription("Total number of cache misses."),
-		metric.WithUnit("{misses}"))
-	if err != nil {
-		return nil, err
-	}
-	evictions, err := meter.Int64ObservableCounter("storage.cache.evictions",
-		metric.WithDescription("Total number of cache evictions."),
-		metric.WithUnit("{evictions}"))
+	in, err := newInstruments(meter)
 	if err != nil {
 		return nil, err
 	}
 
 	attrSet := metric.WithAttributes(attrs...)
 	return meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
-		s := o.Stat()
-		observer.ObserveInt64(sizeBytes, s.Size, attrSet)
-		observer.ObserveInt64(limitBytes, s.Limit, attrSet)
-		observer.ObserveInt64(entries, s.Entries, attrSet)
-		observer.ObserveInt64(hits, s.Hits, attrSet)
-		observer.ObserveInt64(misses, s.Misses, attrSet)
-		observer.ObserveInt64(evictions, s.Evictions, attrSet)
+		in.observe(observer, o.Stat(), attrSet)
 		return nil
-	}, sizeBytes, limitBytes, entries, hits, misses, evictions)
+	}, in.list()...)
+}
+
+type instruments struct {
+	sizeBytes  metric.Int64ObservableGauge
+	limitBytes metric.Int64ObservableGauge
+	entries    metric.Int64ObservableGauge
+	hits       metric.Int64ObservableCounter
+	misses     metric.Int64ObservableCounter
+	evictions  metric.Int64ObservableCounter
+}
+
+func newInstruments(meter metric.Meter) (instruments, error) {
+	var in instruments
+	var err error
+	if in.sizeBytes, err = meter.Int64ObservableGauge("storage.cache.size.bytes",
+		metric.WithDescription("Current cache size in bytes."),
+		metric.WithUnit("By")); err != nil {
+		return in, err
+	}
+	if in.limitBytes, err = meter.Int64ObservableGauge("storage.cache.limit.bytes",
+		metric.WithDescription("Configured cache size limit in bytes."),
+		metric.WithUnit("By")); err != nil {
+		return in, err
+	}
+	if in.entries, err = meter.Int64ObservableGauge("storage.cache.entries",
+		metric.WithDescription("Current number of cached entries."),
+		metric.WithUnit("{entry}")); err != nil {
+		return in, err
+	}
+	if in.hits, err = meter.Int64ObservableCounter("storage.cache.hits",
+		metric.WithDescription("Total number of cache hits."),
+		metric.WithUnit("{hits}")); err != nil {
+		return in, err
+	}
+	if in.misses, err = meter.Int64ObservableCounter("storage.cache.misses",
+		metric.WithDescription("Total number of cache misses."),
+		metric.WithUnit("{misses}")); err != nil {
+		return in, err
+	}
+	if in.evictions, err = meter.Int64ObservableCounter("storage.cache.evictions",
+		metric.WithDescription("Total number of cache evictions."),
+		metric.WithUnit("{evictions}")); err != nil {
+		return in, err
+	}
+	return in, nil
+}
+
+func (in instruments) observe(o metric.Observer, s storage.CacheStat, attrs metric.ObserveOption) {
+	o.ObserveInt64(in.sizeBytes, s.Size, attrs)
+	o.ObserveInt64(in.limitBytes, s.Limit, attrs)
+	o.ObserveInt64(in.entries, s.Entries, attrs)
+	o.ObserveInt64(in.hits, s.Hits, attrs)
+	o.ObserveInt64(in.misses, s.Misses, attrs)
+	o.ObserveInt64(in.evictions, s.Evictions, attrs)
+}
+
+func (in instruments) list() []metric.Observable {
+	return []metric.Observable{
+		in.sizeBytes,
+		in.limitBytes,
+		in.entries,
+		in.hits,
+		in.misses,
+		in.evictions,
+	}
 }
