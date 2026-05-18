@@ -108,6 +108,7 @@ func (c *Cache) Stat() storage.CacheStat {
 	defer c.mutex.Unlock()
 	return storage.CacheStat{
 		Limit:     c.size,
+		Entries:   c.items.Entries,
 		Size:      c.items.Size,
 		Hits:      c.items.Hits,
 		Misses:    c.items.Misses,
