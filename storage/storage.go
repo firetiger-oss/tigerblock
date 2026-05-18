@@ -300,21 +300,24 @@ func LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
 }
 
 // resolveImplicitFileURI treats a bare path (one that contains no ':' anywhere)
-// as a local filesystem path and returns an absolute "file://..." URI. Inputs
+// as a local filesystem path and returns an absolute "file://..." URI. It is
+// applied at the top of every top-level URI-taking function in this package
+// (LoadBucket plus the *At family) so that scheme-less inputs are handled
+// uniformly whether they name a bucket, an object, or a list prefix. Inputs
 // containing ':' — every "scheme://" URI plus ":memory:" — are returned
 // unchanged. Inputs that uri.Split already recognizes as local file paths
 // (those starting with '/', './', '../', or '~') are also returned unchanged
 // so uri.Split's existing expansion (in particular '~' → $HOME) keeps working.
-func resolveImplicitFileURI(bucketURI string) string {
-	if bucketURI == "" || strings.Contains(bucketURI, ":") {
-		return bucketURI
+func resolveImplicitFileURI(s string) string {
+	if s == "" || strings.Contains(s, ":") {
+		return s
 	}
-	if scheme, _, _ := uri.Split(bucketURI); scheme != "" {
-		return bucketURI
+	if scheme, _, _ := uri.Split(s); scheme != "" {
+		return s
 	}
-	abs, err := filepath.Abs(bucketURI)
+	abs, err := filepath.Abs(s)
 	if err != nil {
-		abs = filepath.Clean(bucketURI)
+		abs = filepath.Clean(s)
 	}
 	return "file://" + filepath.ToSlash(abs)
 }
@@ -358,6 +361,7 @@ func HeadObject(ctx context.Context, objectURI string) (ObjectInfo, error) {
 }
 
 func HeadObjectAt(ctx context.Context, registry Registry, objectURI string) (ObjectInfo, error) {
+	objectURI = resolveImplicitFileURI(objectURI)
 	bucketType, bucketName, objectKey := uri.Split(objectURI)
 	bucket, err := registry.LoadBucket(ctx, uri.Join(bucketType, bucketName))
 	if err != nil {
@@ -371,6 +375,7 @@ func GetObject(ctx context.Context, objectURI string, options ...GetOption) (io.
 }
 
 func GetObjectAt(ctx context.Context, registry Registry, objectURI string, options ...GetOption) (io.ReadCloser, ObjectInfo, error) {
+	objectURI = resolveImplicitFileURI(objectURI)
 	bucketType, bucketName, objectKey := uri.Split(objectURI)
 	bucket, err := registry.LoadBucket(ctx, uri.Join(bucketType, bucketName))
 	if err != nil {
@@ -384,6 +389,7 @@ func PutObject(ctx context.Context, objectURI string, object io.Reader, options 
 }
 
 func PutObjectAt(ctx context.Context, registry Registry, objectURI string, object io.Reader, options ...PutOption) (ObjectInfo, error) {
+	objectURI = resolveImplicitFileURI(objectURI)
 	bucketType, bucketName, objectKey := uri.Split(objectURI)
 	bucket, err := registry.LoadBucket(ctx, uri.Join(bucketType, bucketName))
 	if err != nil {
@@ -440,6 +446,7 @@ func DeleteObject(ctx context.Context, objectURI string) error {
 }
 
 func DeleteObjectAt(ctx context.Context, registry Registry, objectURI string) error {
+	objectURI = resolveImplicitFileURI(objectURI)
 	bucketType, bucketName, objectKey := uri.Split(objectURI)
 	bucket, err := registry.LoadBucket(ctx, uri.Join(bucketType, bucketName))
 	if err != nil {
@@ -453,6 +460,8 @@ func CopyObject(ctx context.Context, sourceURI, destURI string, options ...PutOp
 }
 
 func CopyObjectAt(ctx context.Context, registry Registry, sourceURI, destURI string, options ...PutOption) error {
+	sourceURI = resolveImplicitFileURI(sourceURI)
+	destURI = resolveImplicitFileURI(destURI)
 	srcScheme, srcBucket, srcKey := uri.Split(sourceURI)
 	dstScheme, dstBucket, dstKey := uri.Split(destURI)
 
@@ -711,6 +720,7 @@ func ListObjects(ctx context.Context, prefixURI string, options ...ListOption) i
 }
 
 func ListObjectsAt(ctx context.Context, registry Registry, prefixURI string, options ...ListOption) iter.Seq2[Object, error] {
+	prefixURI = resolveImplicitFileURI(prefixURI)
 	return func(yield func(Object, error) bool) {
 		bucketType, bucketName, objectPrefix := uri.Split(prefixURI)
 		bucket, err := registry.LoadBucket(ctx, uri.Join(bucketType, bucketName))

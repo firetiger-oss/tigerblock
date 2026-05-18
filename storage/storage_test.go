@@ -1035,20 +1035,6 @@ func TestCopyObject(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid source URI", func(t *testing.T) {
-		err := storage.CopyObject(ctx, "invalid-uri", "TestCopyObject://:memory:/dest.txt")
-		if err == nil {
-			t.Fatal("expected error for invalid source URI")
-		}
-	})
-
-	t.Run("invalid dest URI", func(t *testing.T) {
-		err := storage.CopyObject(ctx, "TestCopyObject://:memory:/source.txt", "invalid-uri")
-		if err == nil {
-			t.Fatal("expected error for invalid dest URI")
-		}
-	})
-
 	t.Run("bucket not found", func(t *testing.T) {
 		err := storage.CopyObject(ctx, "NonExistent://:memory:/source.txt", "NonExistent://:memory:/dest.txt")
 		if !errors.Is(err, storage.ErrBucketNotFound) {
@@ -1264,5 +1250,83 @@ func TestLoadBucketImplicitFile(t *testing.T) {
 	want := "file://" + filepath.ToSlash(filepath.Join(cwd, "TestLoadBucketImplicitFile-bare-name")) + "/"
 	if got := b.Location(); got != want {
 		t.Fatalf("Location() = %q, want %q", got, want)
+	}
+}
+
+func TestImplicitFileObjectURIs(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ctx := t.Context()
+
+	const payload = "hello"
+	const key = "TestImplicitFileObjectURIs/out.json"
+	const copyKey = "TestImplicitFileObjectURIs/copy.json"
+
+	if _, err := storage.PutObject(ctx, key, strings.NewReader(payload)); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+
+	abs := filepath.Join(dir, key)
+	if b, err := os.ReadFile(abs); err != nil {
+		t.Fatalf("ReadFile after PutObject: %v", err)
+	} else if string(b) != payload {
+		t.Fatalf("file content = %q, want %q", b, payload)
+	}
+
+	info, err := storage.HeadObject(ctx, key)
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if info.Size != int64(len(payload)) {
+		t.Fatalf("HeadObject size = %d, want %d", info.Size, len(payload))
+	}
+
+	r, _, err := storage.GetObject(ctx, key)
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	got, err := io.ReadAll(r)
+	r.Close()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("GetObject = %q, want %q", got, payload)
+	}
+
+	if err := storage.CopyObject(ctx, key, copyKey); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	r2, _, err := storage.GetObject(ctx, copyKey)
+	if err != nil {
+		t.Fatalf("GetObject(copy): %v", err)
+	}
+	got2, err := io.ReadAll(r2)
+	r2.Close()
+	if err != nil {
+		t.Fatalf("ReadAll(copy): %v", err)
+	}
+	if string(got2) != payload {
+		t.Fatalf("GetObject(copy) = %q, want %q", got2, payload)
+	}
+
+	wantOut := "file://" + filepath.ToSlash(filepath.Join(dir, key))
+	wantCopy := "file://" + filepath.ToSlash(filepath.Join(dir, copyKey))
+	var keys []string
+	for obj, err := range storage.ListObjects(ctx, "TestImplicitFileObjectURIs") {
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	if !slices.Contains(keys, wantOut) || !slices.Contains(keys, wantCopy) {
+		t.Fatalf("ListObjects keys = %v, want both %q and %q", keys, wantOut, wantCopy)
+	}
+
+	if err := storage.DeleteObject(ctx, key); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if _, err := storage.HeadObject(ctx, key); !errors.Is(err, storage.ErrObjectNotFound) {
+		t.Fatalf("HeadObject after Delete: err = %v, want ErrObjectNotFound", err)
 	}
 }
