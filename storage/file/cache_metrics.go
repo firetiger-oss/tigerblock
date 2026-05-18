@@ -59,19 +59,19 @@ func registerCacheMetrics(c *Cache, meterProvider metric.MeterProvider) {
 		observer.ObserveInt64(metrics.sizeBytes, stat.Size, base)
 		observer.ObserveInt64(metrics.limitBytes, stat.Limit, base)
 		observer.ObserveInt64(metrics.entries, stat.Entries, base)
-		observer.ObserveInt64(metrics.inFlightBytes, cache.inFlight.Load(), base)
+		observer.ObserveInt64(metrics.inFlightBytes, stat.InFlight, base)
 		observer.ObserveInt64(metrics.hits, stat.Hits, base)
 		observer.ObserveInt64(metrics.misses, stat.Misses, base)
 		observer.ObserveInt64(metrics.evictions, stat.Evictions, base)
-		observer.ObserveInt64(metrics.evictUntilFitsRuns, cache.evictUntilFitsCount.Load(), base)
-		observer.ObserveInt64(metrics.evictForSpaceRuns, cache.evictForSpaceCount.Load(), base)
-		observer.ObserveInt64(metrics.writeErrors, cache.writeErrorsENOSPC.Load(),
+		observer.ObserveInt64(metrics.evictUntilFitsRuns, stat.EvictUntilFitsCount, base)
+		observer.ObserveInt64(metrics.evictForSpaceRuns, stat.EvictForSpaceCount, base)
+		observer.ObserveInt64(metrics.writeErrors, stat.WriteErrorsENOSPC,
 			metric.WithAttributes(
 				attribute.String("storage.cache.id", cacheID),
 				attribute.String("storage.cache.kind", cacheKindFile),
 				attribute.String("error.type", "enospc"),
 			))
-		observer.ObserveInt64(metrics.writeErrors, cache.writeErrorsOther.Load(),
+		observer.ObserveInt64(metrics.writeErrors, stat.WriteErrorsOther,
 			metric.WithAttributes(
 				attribute.String("storage.cache.id", cacheID),
 				attribute.String("storage.cache.kind", cacheKindFile),

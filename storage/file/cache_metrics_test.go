@@ -114,7 +114,7 @@ func TestCacheMetricsExposeFireFix(t *testing.T) {
 }
 
 // TestCacheWithoutMeterProvider verifies that the cache works (and counters
-// still tick internally) when no MeterProvider option is supplied.
+// still tick, visible via Stat) when no MeterProvider option is supplied.
 func TestCacheWithoutMeterProvider(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewCache(cacheDir, 4096)
@@ -122,7 +122,7 @@ func TestCacheWithoutMeterProvider(t *testing.T) {
 		t.Error("metricsRegistration should be nil without WithMeterProvider")
 	}
 	cache.evictUntilFits()
-	if got := cache.evictUntilFitsCount.Load(); got != 1 {
-		t.Errorf("evictUntilFitsCount = %d, want 1 — internal counters should tick regardless of metrics registration", got)
+	if got := cache.Stat().EvictUntilFitsCount; got != 1 {
+		t.Errorf("Stat().EvictUntilFitsCount = %d, want 1 — counters should tick regardless of metrics registration", got)
 	}
 }

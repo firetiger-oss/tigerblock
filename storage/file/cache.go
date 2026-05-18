@@ -140,12 +140,17 @@ func (c *Cache) Stat() storage.CacheStat {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	return storage.CacheStat{
-		Limit:     c.size,
-		Entries:   c.items.Entries,
-		Size:      c.items.Size,
-		Hits:      c.items.Hits,
-		Misses:    c.items.Misses,
-		Evictions: c.items.Evictions,
+		Limit:               c.size,
+		Entries:             c.items.Entries,
+		Size:                c.items.Size,
+		Hits:                c.items.Hits,
+		Misses:              c.items.Misses,
+		Evictions:           c.items.Evictions,
+		InFlight:            c.inFlight.Load(),
+		EvictUntilFitsCount: c.evictUntilFitsCount.Load(),
+		EvictForSpaceCount:  c.evictForSpaceCount.Load(),
+		WriteErrorsENOSPC:   c.writeErrorsENOSPC.Load(),
+		WriteErrorsOther:    c.writeErrorsOther.Load(),
 	}
 }
 
