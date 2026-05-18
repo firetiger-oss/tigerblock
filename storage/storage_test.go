@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/firetiger-oss/tigerblock/internal/sequtil"
 	"github.com/firetiger-oss/tigerblock/storage"
+	_ "github.com/firetiger-oss/tigerblock/storage/file"
 	"github.com/firetiger-oss/tigerblock/storage/memory"
 	storagetest "github.com/firetiger-oss/tigerblock/test"
 )
@@ -1205,5 +1208,61 @@ func TestCopyObjectContextCancellation(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func TestResolveImplicitFileURI(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs := func(p string) string {
+		return "file://" + filepath.ToSlash(filepath.Join(cwd, p))
+	}
+
+	tests := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"s3://bucket/key", "s3://bucket/key"},
+		{":memory:", ":memory:"},
+		{":memory:foo", ":memory:foo"},
+		{"file:///abs/path", "file:///abs/path"},
+		{"weird:filename", "weird:filename"},
+
+		{"/abs/path", "/abs/path"},
+		{"./rel", "./rel"},
+		{"../rel", "../rel"},
+		{"~/path", "~/path"},
+		{".", "."},
+		{"..", ".."},
+
+		{"simple-file-name", abs("simple-file-name")},
+		{"path/to/file", abs("path/to/file")},
+		{"a//b/../c", abs("a/c")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got := storage.ResolveImplicitFileURI(tt.in)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadBucketImplicitFile(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := storage.LoadBucket(t.Context(), "TestLoadBucketImplicitFile-bare-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "file://" + filepath.ToSlash(filepath.Join(cwd, "TestLoadBucketImplicitFile-bare-name")) + "/"
+	if got := b.Location(); got != want {
+		t.Fatalf("Location() = %q, want %q", got, want)
 	}
 }

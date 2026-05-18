@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -295,7 +296,27 @@ func DefaultRegistry() Registry {
 // Bucket instances are cached by normalized URI to avoid recreating
 // adapters on each call.
 func LoadBucket(ctx context.Context, bucketURI string) (Bucket, error) {
-	return defaultRegistry.LoadBucket(ctx, bucketURI)
+	return defaultRegistry.LoadBucket(ctx, resolveImplicitFileURI(bucketURI))
+}
+
+// resolveImplicitFileURI treats a bare path (one that contains no ':' anywhere)
+// as a local filesystem path and returns an absolute "file://..." URI. Inputs
+// containing ':' — every "scheme://" URI plus ":memory:" — are returned
+// unchanged. Inputs that uri.Split already recognizes as local file paths
+// (those starting with '/', './', '../', or '~') are also returned unchanged
+// so uri.Split's existing expansion (in particular '~' → $HOME) keeps working.
+func resolveImplicitFileURI(bucketURI string) string {
+	if bucketURI == "" || strings.Contains(bucketURI, ":") {
+		return bucketURI
+	}
+	if scheme, _, _ := uri.Split(bucketURI); scheme != "" {
+		return bucketURI
+	}
+	abs, err := filepath.Abs(bucketURI)
+	if err != nil {
+		abs = filepath.Clean(bucketURI)
+	}
+	return "file://" + filepath.ToSlash(abs)
 }
 
 // loadBucket is the internal bucket loading logic (not cached).
