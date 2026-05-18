@@ -87,21 +87,21 @@ func TestCacheMetricsExposeFireFix(t *testing.T) {
 		}
 	}
 
-	if got := counters["storage.file_cache.evict_until_fits.invocations"]; got == 0 {
+	if got := counters["storage.cache.evict_until_fits.invocations"]; got == 0 {
 		t.Errorf("evict_until_fits.invocations = 0, want >0 — proactive eviction path did not run")
 	}
-	if got := gauges["storage.file_cache.limit.bytes"]; got != cacheLimit {
+	if got := gauges["storage.cache.limit.bytes"]; got != cacheLimit {
 		t.Errorf("limit.bytes = %d, want %d", got, cacheLimit)
 	}
 	for _, name := range []string{
-		"storage.file_cache.size.bytes",
-		"storage.file_cache.entries",
-		"storage.file_cache.inflight.bytes",
-		"storage.file_cache.hits",
-		"storage.file_cache.misses",
-		"storage.file_cache.evictions",
-		"storage.file_cache.evict_for_space.invocations",
-		"storage.file_cache.write_errors",
+		"storage.cache.size.bytes",
+		"storage.cache.entries",
+		"storage.cache.inflight.bytes",
+		"storage.cache.hits",
+		"storage.cache.misses",
+		"storage.cache.evictions",
+		"storage.cache.evict_for_space.invocations",
+		"storage.cache.write_errors",
 	} {
 		if _, gaugeOk := gauges[name]; gaugeOk {
 			continue
