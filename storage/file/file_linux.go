@@ -9,8 +9,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// isErrAttrNotExist reports whether err means an extended attribute could not
+// be read because it is effectively absent.
+//
+// ENODATA is the usual "this attribute is not set" signal. EOPNOTSUPP is
+// returned when the underlying filesystem does not support extended attributes
+// at all — for example overlayfs layers, some tmpfs configurations, and other
+// container or network filesystems. In that case there are no xattrs to read,
+// so callers should treat the metadata as absent and fall back to stat-derived
+// values rather than failing the whole operation.
 func isErrAttrNotExist(err error) bool {
-	return errors.Is(err, unix.ENODATA)
+	return errors.Is(err, unix.ENODATA) || errors.Is(err, unix.EOPNOTSUPP)
 }
 
 // renameIfNotExist atomically moves oldpath to newpath and fails if newpath
