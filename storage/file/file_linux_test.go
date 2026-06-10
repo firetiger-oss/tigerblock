@@ -2,6 +2,7 @@ package file
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,6 +125,27 @@ func TestLinkThenUnlink(t *testing.T) {
 			t.Fatalf("expected target to remain when rollback fails, stat err = %v", statErr)
 		}
 	})
+}
+
+func TestIsErrAttrNotExist(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"enodata", unix.ENODATA, true},
+		{"eopnotsupp", unix.EOPNOTSUPP, true},
+		{"wrapped eopnotsupp", fmt.Errorf("reading xattr: %w", unix.EOPNOTSUPP), true},
+		{"enoent is not attr-not-exist", unix.ENOENT, false},
+		{"nil", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isErrAttrNotExist(tc.err); got != tc.want {
+				t.Errorf("isErrAttrNotExist(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestIsRenameFlagUnsupported(t *testing.T) {
