@@ -203,6 +203,68 @@ func TestCache(t *testing.T) {
 			t.Error("expiration time is too late")
 		}
 	})
+
+	t.Run("invalidate forces re-fetch of current version", func(t *testing.T) {
+		var callCount atomic.Int32
+		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+			if callCount.Add(1) == 1 {
+				return Value("stale"), "v1", nil
+			}
+			return Value("fresh"), "v2", nil
+		})
+
+		cache := NewCache(provider)
+
+		if v, _, _ := cache.GetSecretValue(ctx, "secret"); string(v) != "stale" {
+			t.Errorf("expected 'stale' on first read, got %q", v)
+		}
+		cache.GetSecretValue(ctx, "secret") // cache hit, no new provider call
+		if callCount.Load() != 1 {
+			t.Errorf("expected 1 provider call before invalidate, got %d", callCount.Load())
+		}
+
+		cache.Invalidate("secret")
+
+		if v, _, _ := cache.GetSecretValue(ctx, "secret"); string(v) != "fresh" {
+			t.Errorf("expected 'fresh' after invalidate, got %q", v)
+		}
+		if callCount.Load() != 2 {
+			t.Errorf("expected 2 provider calls after invalidate, got %d", callCount.Load())
+		}
+	})
+
+	t.Run("invalidate leaves version-pinned entries intact", func(t *testing.T) {
+		var callCount atomic.Int32
+		provider := ProviderFunc(func(ctx context.Context, name string, options ...GetOption) (Value, string, error) {
+			callCount.Add(1)
+			if v := NewGetOptions(options...).Version(); v != "" {
+				return Value("pinned-" + v), v, nil
+			}
+			return Value("current"), "current", nil
+		})
+
+		cache := NewCache(provider)
+
+		cache.GetSecretValue(ctx, "secret")                    // current
+		cache.GetSecretValue(ctx, "secret", WithVersion("v1")) // pinned
+		if callCount.Load() != 2 {
+			t.Fatalf("expected 2 provider calls priming the cache, got %d", callCount.Load())
+		}
+
+		cache.Invalidate("secret")
+
+		// The pinned version is immutable, so it stays cached; only the current
+		// entry was dropped.
+		cache.GetSecretValue(ctx, "secret", WithVersion("v1"))
+		if callCount.Load() != 2 {
+			t.Errorf("expected version-pinned read to stay cached after invalidate, got %d calls", callCount.Load())
+		}
+
+		cache.GetSecretValue(ctx, "secret")
+		if callCount.Load() != 3 {
+			t.Errorf("expected current read to re-fetch after invalidate, got %d calls", callCount.Load())
+		}
+	})
 }
 
 func TestCacheImplementsProvider(t *testing.T) {
