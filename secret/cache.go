@@ -80,6 +80,17 @@ func (c *Cache) GetSecretValue(ctx context.Context, name string, options ...GetO
 	return entry.value, entry.version, nil
 }
 
+// Invalidate drops the cached current-version entry for name, so the next
+// GetSecretValue(name) without an explicit version re-fetches from the
+// underlying provider. Call it after rotating or deleting a secret to keep a
+// stale value from being served for the rest of the TTL.
+//
+// Version-pinned entries are left in place: a specific secret version is
+// immutable, so its cached bytes never go stale.
+func (c *Cache) Invalidate(name string) {
+	c.cache.Drop(cacheKey{name: name})
+}
+
 func (c *Cache) expireAt() time.Time {
 	if c.ttl > 0 {
 		return time.Now().Add(c.ttl)
